@@ -25,6 +25,7 @@ import uuid
 
 import pytest
 
+from message_layer import text_to_bits
 from simple_websocket import Client
 
 BASE = os.environ.get("QDS_TEST_SERVER")
@@ -257,3 +258,184 @@ def test_attacker_stays_hidden_until_reveal(room):
     assert state is not None
     assert state["revealed"] is False
     assert all(p["is_attacker"] is None for p in state["participants"])
+
+
+# --- private conversations over the socket ---------------------------------
+
+def _delivered(state, text):
+    return any(m["status"] == "delivered" and m["text"] == text
+               for m in state["messages"])
+
+
+def _await(sock, frame_type, seconds=6.0):
+    """
+    Wait for one specific frame and return it.
+
+    Socket.drain() returns EVERY frame it collected, not just the one it was
+    waiting for, so indexing drain()[0] yields whatever state frame happened to
+    arrive first. Selecting by type is the only reliable way to get a named
+    frame out of it.
+    """
+    sock.drain(until=frame_type, seconds=seconds)
+    for frame in reversed(sock.frames):
+        if frame.get("type") == frame_type:
+            return frame
+    return None
+
+
+def _open_dm(alice, peer_id):
+    alice.send({"type": "open_dm", "peer_id": peer_id})
+    opened = _await(alice, "dm_opened")
+    assert opened is not None, "the DM was never opened"
+    conv_id = opened["conversation"]["id"]
+    assert conv_id.startswith("dm:")
+    return conv_id
+
+
+def test_dm_opens_and_carries_a_message(room):
+    """The happy path: Alice opens a DM with Bob and sends into it."""
+    alice = room("Alice")
+    bob = room("Bob")
+
+    conv_id = _open_dm(alice, bob.id)
+
+    alice.send({"type": "send", "text": "PIN 4471", "shots": 64,
+                "conversation_id": conv_id})
+
+    state = bob.wait_for(lambda s: _delivered(s, "PIN 4471"), seconds=45)
+    assert state is not None, "Bob never received the DM"
+    msg = [m for m in state["messages"] if m["text"] == "PIN 4471"][0]
+    assert msg["conversation_id"] == conv_id
+    assert msg["conversation_kind"] == "dm"
+
+
+def test_eve_cannot_see_dm_content_over_the_socket(room):
+    """
+    The headline privacy property, end to end over a real WebSocket.
+
+    Eve is a room participant with an open socket. She must receive neither the
+    DM plaintext nor the delivered result, in any state frame. Asserted against
+    the serialised frame because that is what actually crosses the wire -- a
+    leak in a field the UI happens not to render is still a leak.
+    """
+    alice = room("Alice")
+    bob = room("Bob")
+    eve = room("Eve", attacker=True)
+
+    conv_id = _open_dm(alice, bob.id)
+
+    alice.send({"type": "send", "text": "PAYROLL SECRET 9000", "shots": 64,
+                "conversation_id": conv_id})
+
+    # Let the message run all the way through transit.
+    assert bob.wait_for(lambda s: _delivered(s, "PAYROLL SECRET 9000"),
+                        seconds=45) is not None
+    eve.drain(seconds=1.0)  # collect every frame Eve is sent
+
+    assert eve.frames, "Eve received no frames at all"
+    blob = json.dumps(eve.frames)
+    assert "PAYROLL SECRET 9000" not in blob, (
+        "DM plaintext leaked to the attacker over the socket")
+
+    # Bob did get it, so this is a privacy boundary and not a delivery failure.
+    assert _delivered(bob.state(), "PAYROLL SECRET 9000")
+
+
+def test_dm_row_appears_locked_for_the_attacker(room):
+    """Eve sees the conversation exists but cannot read it."""
+    alice = room("Alice")
+    bob = room("Bob")
+    eve = room("Eve", attacker=True)
+
+    conv_id = _open_dm(alice, bob.id)
+
+    state = eve.wait_for(
+        lambda s: any(c["id"] == conv_id for c in s["conversations"]), seconds=5
+    )
+    assert state is not None, "the attacker cannot even see the DM exists"
+    row = next(c for c in state["conversations"] if c["id"] == conv_id)
+    assert row["locked"] is True
+    assert row["is_member"] is False
+
+
+def test_outsider_cannot_send_into_a_dm(room):
+    """
+    Read access and write access are different things. Clearing the quantum
+    gate grants reading; it must not let Eve post into someone else's chat.
+    """
+    alice = room("Alice")
+    bob = room("Bob")
+    eve = room("Eve", attacker=True)
+
+    conv_id = _open_dm(alice, bob.id)
+
+    eve.send({"type": "send", "text": "INJECTED", "shots": 64,
+              "conversation_id": conv_id})
+
+    err = _await(eve, "error")
+    assert err is not None, "an outsider was allowed to send into a private chat"
+    assert "private chat" in err["error"].lower()
+
+
+def test_unknown_conversation_is_refused(room):
+    """
+    An unknown conversation id must not silently become the group. Falling back
+    would publish a private message to the entire room while appearing to send
+    it successfully.
+    """
+    alice = room("Alice")
+    alice.send({"type": "send", "text": "HELLO", "shots": 64,
+                "conversation_id": "dm:doesnot|exist"})
+    err = _await(alice, "error")
+    assert err is not None, "an unknown conversation id was accepted"
+    assert "no such conversation" in err["error"].lower()
+
+
+def test_gate_denies_a_guessing_attacker(room):
+    """Eve tries to read the DM by presenting the plaintext she can see."""
+    alice = room("Alice")
+    bob = room("Bob")
+    eve = room("Eve", attacker=True)
+
+    conv_id = _open_dm(alice, bob.id)
+
+    alice.send({"type": "send", "text": "PIN 9911", "shots": 64,
+                "conversation_id": conv_id})
+    assert bob.wait_for(lambda s: _delivered(s, "PIN 9911"), seconds=45) is not None
+
+    # A guess: the attacker's best shot is the plaintext itself.
+    eve.send({"type": "dm_access", "conversation_id": conv_id,
+              "candidate_bits": text_to_bits("PIN 9911"), "shots": 64})
+
+    res = _await(eve, "dm_access_result", seconds=25)
+    assert res is not None, "the gate never answered"
+    assert res["granted"] is False
+    assert res["verdict"] == "ACCESS DENIED"
+    assert res["match_rate"] < res["threshold"]
+
+
+def test_access_verdict_is_not_broadcast_to_the_room(room):
+    """
+    A denied attempt is private. Broadcasting it would tell the room who is
+    trying to break into a chat -- the one thing the chat is meant to keep
+    quiet -- and would spoil the reveal by announcing the attempt before it
+    has had a chance to succeed.
+    """
+    alice = room("Alice")
+    bob = room("Bob")
+    eve = room("Eve", attacker=True)
+
+    conv_id = _open_dm(alice, bob.id)
+    alice.send({"type": "send", "text": "PIN 9911", "shots": 64,
+                "conversation_id": conv_id})
+    assert bob.wait_for(lambda s: _delivered(s, "PIN 9911"), seconds=45) is not None
+
+    eve.send({"type": "dm_access", "conversation_id": conv_id,
+              "candidate_bits": text_to_bits("PIN 9911"), "shots": 64})
+    assert _await(eve, "dm_access_result", seconds=25) is not None
+
+    alice.drain(seconds=1.5)
+    bob.drain(seconds=1.0)
+    for other in (alice, bob):
+        assert "dm_access_result" not in json.dumps(other.frames), (
+            "an access attempt was broadcast to the room")

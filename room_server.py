@@ -44,6 +44,38 @@ _SCHEDULER_THREAD = None
 _SEMAPHORE = threading.Semaphore(MAX_WORKERS)
 
 
+def _resolve_conversation(room, sender_id, conversation_id):
+    """
+    Work out which conversation a send belongs to.
+
+    Defaults to the group when no id is supplied, so every pre-existing client
+    and the REST fallback keep working unchanged.
+
+    A supplied-but-unknown id RAISES rather than falling back. Silently
+    demoting a private message into the group would publish it to the whole
+    room -- the worst possible outcome for the feature, and one that would look
+    like a successful send. Better to refuse loudly.
+    """
+    if not conversation_id:
+        return room.group_conversation()
+
+    conv = room.conversations.get(conversation_id)
+    if conv is None:
+        raise ValueError("No such conversation in this room.")
+
+    sender = room.participants.get(sender_id)
+    if sender is None:
+        raise ValueError("You are not in this room.")
+
+    # Sending into a DM you are not part of would let anyone post into someone
+    # else's private chat. Refuse it; an outsider who legitimately needs access
+    # goes through the quantum gate, which grants read access, not write.
+    if conv.kind == "dm" and not conv.is_member(sender.id):
+        raise ValueError("You cannot send into a private chat you are not part of.")
+
+    return conv
+
+
 def start_scheduler(app_module):
     """Start the transit dispatcher. Called once from server.py at startup."""
     global _SCHEDULER_THREAD
@@ -465,10 +497,60 @@ def register_socket_routes(app, sock, server):
                             msg.get("text"),
                             shots=int(msg.get("shots") or 96),
                             noise_free=bool(msg.get("noise_free")),
+                            conversation=_resolve_conversation(
+                                room, pid, msg.get("conversation_id")),
                         )
                         broadcast(room)
                     except (ValueError, AttributeError) as exc:
                         send({"type": "error", "error": str(exc)})
+                    continue
+
+                if kind == "open_dm":
+                    conv, err = room.open_dm(
+                        room.participants.get(pid), msg.get("peer_id"))
+                    if err:
+                        send({"type": "error", "error": err})
+                    else:
+                        send({"type": "dm_opened", "conversation": conv.public(pid)})
+                        broadcast(room)
+                    continue
+
+                if kind == "dm_access":
+                    # The quantum gate. Everything about the decision lives in
+                    # signature.gate_access -- this handler only moves the
+                    # candidate bits across and reports the outcome. It never
+                    # decides anything itself, and the room's master seed is
+                    # neither accepted nor returned.
+                    result, err = room.request_dm_access(
+                        room.participants.get(pid),
+                        msg.get("conversation_id"),
+                        msg.get("candidate_bits") or [],
+                        shots=int(msg.get("shots") or 96),
+                    )
+                    if err:
+                        send({"type": "error", "error": err,
+                              "conversation_id": msg.get("conversation_id")})
+                        continue
+                    # Send the verdict to the requester FIRST. Broadcasting it
+                    # would tell the room who is trying to break into a private
+                    # chat, which is the one thing the chat is meant to keep
+                    # quiet -- and would give away that the attempt is happening
+                    # before delivery, spoiling the reveal.
+                    send({"type": "dm_access_result",
+                          "conversation_id": msg.get("conversation_id"),
+                          "granted": result["granted"],
+                          "verdict": result["verdict"],
+                          "witness_verdict": result.get("witness_verdict"),
+                          "match_rate": result.get("match_rate"),
+                          "threshold": result.get("threshold"),
+                          "total": result.get("total"),
+                          "mismatches": result.get("mismatches"),
+                          "rows": result.get("rows") or [],
+                          "explanation": result.get("explanation")})
+                    if result["granted"]:
+                        # Only now does anyone else hear about it: access was
+                        # earned, so the room seeing it afterwards is the point.
+                        broadcast(room)
                     continue
 
                 if kind == "attack":
