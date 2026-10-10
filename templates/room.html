@@ -55,6 +55,10 @@
   }
   #roomName { font-weight: 600; font-size: 0.95rem; flex: 1;
               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #backBtn {
+    display: none; background: none; border: 0; color: var(--accent);
+    font-size: 1.3rem; cursor: pointer; padding: 0 0.2rem; flex-shrink: 0;
+  }
   #connDot {
     width: 9px; height: 9px; border-radius: 50%;
     background: var(--muted); flex-shrink: 0;
@@ -65,25 +69,68 @@
   /* ---- layout ---- */
   main { flex: 1; display: flex; min-height: 0; }
 
-  /* participants panel */
+  /* conversation list */
   #side {
-    width: 168px;
+    width: 210px;
     flex-shrink: 0;
     background: var(--panel);
     border-right: 1px solid var(--line);
-    padding: 0.6rem 0.5rem;
-    overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    min-height: 0;
   }
   .sidehead {
     font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.1em;
-    color: var(--muted); font-weight: 700; margin-bottom: 0.15rem;
+    color: var(--muted); font-weight: 700;
+    padding: 0.6rem 0.6rem 0.35rem;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  #newDmBtn {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--accent);
+    border-radius: 7px; width: 24px; height: 24px; font-size: 1rem;
+    cursor: pointer; line-height: 1; padding: 0;
+  }
+
+  #chatList { overflow-y: auto; flex: 0 1 auto; padding-bottom: 0.3rem; }
+
+  .chat {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 0.6rem; cursor: pointer;
+    border-left: 3px solid transparent;
+  }
+  .chat:hover { background: var(--panel2); }
+  .chat.active { background: var(--panel2); border-left-color: var(--accent); }
+  .chat .av {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--panel2); border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.72rem; font-weight: 700; color: var(--accent); flex-shrink: 0;
+  }
+  .chat.locked .av { color: var(--muted); border-color: #3a3f55; }
+  .chat .meta { flex: 1; min-width: 0; }
+  .chat .nm2 {
+    font-size: 0.84rem; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chat .pv {
+    font-size: 0.7rem; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chat .badge {
+    background: var(--accent); color: #fff; border-radius: 9px;
+    font-size: 0.62rem; font-weight: 700; padding: 0.08rem 0.32rem; flex-shrink: 0;
+  }
+  .chat .padlock { font-size: 0.7rem; color: var(--muted); flex-shrink: 0; }
+
+  /* members, below the chat list */
+  #peopleWrap {
+    border-top: 1px solid var(--line);
+    overflow-y: auto; flex: 0 1 auto; min-height: 0;
+    display: flex; flex-direction: column;
   }
   .person {
     display: flex; align-items: center; gap: 0.4rem;
-    padding: 0.35rem 0.4rem; border-radius: 7px; font-size: 0.82rem;
+    padding: 0.3rem 0.6rem; font-size: 0.8rem;
   }
   .person.me { background: var(--panel2); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex-shrink: 0; }
@@ -91,34 +138,22 @@
   .person .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   #consoleLink {
-    margin-top: auto;
-    display: block;
-    text-decoration: none;
-    background: #1a1020;
-    border: 1px solid #4a1f38;
-    border-radius: 9px;
-    padding: 0.55rem 0.5rem;
-    color: var(--bad);
-    text-align: center;
+    display: block; text-decoration: none;
+    background: #1a1020; border: 1px solid #4a1f38;
+    border-radius: 9px; padding: 0.5rem; margin: 0.5rem;
+    color: var(--bad); text-align: center; flex-shrink: 0;
   }
   #consoleLink b { display: block; font-size: 0.72rem; }
   #consoleLink span { display: block; font-size: 0.6rem; color: var(--muted); margin-top: 0.15rem; }
 
   /* chat column */
   #chat {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
+    flex: 1; display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
   }
   #log {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0.7rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
+    flex: 1; overflow-y: auto; padding: 0.7rem;
+    display: flex; flex-direction: column; gap: 0.55rem;
   }
 
   .bubble {
@@ -132,7 +167,6 @@
   .who { font-size: 0.68rem; font-weight: 700; color: var(--accent); margin-bottom: 0.15rem; }
   .body { font-size: 0.92rem; word-break: break-word; }
 
-  /* in-transit bubble */
   .bubble.transit {
     border-color: var(--warn);
     background: #241d10;
@@ -149,7 +183,6 @@
   .secs { font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem;
           color: var(--warn); font-weight: 700; min-width: 3.4rem; text-align: right; }
 
-  /* attack banner on a delivered message */
   .hit {
     margin-top: 0.4rem; padding: 0.35rem 0.45rem; border-radius: 7px;
     background: #2a1220; border: 1px solid #5c2038; font-size: 0.72rem;
@@ -158,7 +191,6 @@
   .hit .who2 { color: var(--text); }
   .clean { margin-top: 0.35rem; font-size: 0.72rem; color: var(--good); }
 
-  /* bit diff */
   .diff { margin-top: 0.4rem; font-family: ui-monospace, Menlo, monospace;
           font-size: 0.7rem; line-height: 1.35; word-break: break-all;
           background: #0d1526; border: 1px solid var(--line);
@@ -166,9 +198,40 @@
   .diff .ok { color: #3c4a66; }
   .diff .bad { color: var(--bad); background: #3d1424; font-weight: 700; }
 
-  /* transient notice for validation errors */
-  #toast {
-    font-family: inherit;
+  /* locked / empty states */
+  #locked {
+    flex: 1; display: none; flex-direction: column;
+    align-items: center; justify-content: center; gap: 0.5rem;
+    padding: 1.5rem; text-align: center;
+  }
+  #locked.show { display: flex; }
+  #locked .big { font-size: 1.8rem; }
+  #locked .t { font-weight: 700; font-size: 0.92rem; }
+  #locked .d { color: var(--muted); font-size: 0.78rem; line-height: 1.5; max-width: 34ch; }
+  #locked .stat {
+    font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem;
+    color: var(--muted); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 7px; padding: 0.4rem 0.6rem;
+  }
+  #locked .stat b { color: var(--good); }
+  #locked .stat b.no { color: var(--bad); }
+
+  /* new-DM picker */
+  #dmPicker {
+    position: fixed; inset: 0; background: rgba(4,8,18,0.82);
+    display: none; align-items: center; justify-content: center; z-index: 60;
+    padding: 1.2rem;
+  }
+  #dmPicker.show { display: flex; }
+  #dmPicker .card { max-width: 320px; }
+  #dmPicker .pick {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.55rem; border-radius: 8px; cursor: pointer; font-size: 0.86rem;
+  }
+  #dmPicker .pick:hover { background: var(--panel2); }
+  #dmPicker .cancel {
+    width: 100%; margin-top: 0.6rem; background: transparent; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 9px; padding: 0.55rem; cursor: pointer;
   }
 
   /* composer */
@@ -182,10 +245,12 @@
     padding: 0.6rem 0.85rem; font-size: 0.92rem;
   }
   #text:focus { outline: none; border-color: var(--accent); }
+  #text:disabled { opacity: 0.5; }
   #sendBtn {
     background: var(--accent); color: #fff; border: 0; border-radius: 50%;
     width: 42px; height: 42px; font-size: 1.1rem; cursor: pointer; flex-shrink: 0;
   }
+  #sendBtn:disabled { opacity: 0.4; }
 
   /* ---- join screen ---- */
   #join {
@@ -216,9 +281,13 @@
   .note { font-size: 0.68rem; color: var(--muted); line-height: 1.45;
           margin-top: 0.8rem; border-top: 1px solid var(--line); padding-top: 0.7rem; }
 
-  @media (max-width: 480px) {
-    #side { width: 122px; }
-    .bubble { max-width: 94%; }
+  @media (max-width: 520px) {
+    #side { width: 100%; }
+    #side.hidden { display: none; }
+    #backBtn { display: block; }
+  }
+  @media (min-width: 521px) {
+    #backBtn { display: none !important; }
   }
 </style>
 </head>
@@ -228,7 +297,7 @@
 <div id="join">
   <div class="card">
     <h1>Quantum Secure Channel</h1>
-    <p class="sub">Group room over a quantum key-distribution link. Messages are
+    <p class.sub">Group room over a quantum key-distribution link. Messages are
       teleported bit by bit. During transit the channel is exposed — that window
       is where an attacker operates.</p>
 
@@ -260,6 +329,9 @@
       Up to {{ max_chars }} characters per message — short messages work fine.
       Every message spends its full transit window exposed to interception
       before it is delivered.<br><br>
+      Private chats are opened from the <b>+</b> button in the chat list. They
+      are readable only by their participants — an attacker in the room sees
+      the chat exists but not what is in it.<br><br>
       Attacking? Open <b>/attack</b> with the room code — the console is a
       separate page and can run on another device.
     </div>
@@ -268,6 +340,7 @@
 
 <!-- ============ ROOM ============ -->
 <header>
+  <button id="backBtn" title="Back to chats">‹</button>
   <div class="roomid" id="roomCode">····</div>
   <div id="roomName">room</div>
   <div id="connDot"></div>
@@ -275,8 +348,17 @@
 
 <main>
   <aside id="side">
-    <div class="sidehead">Members</div>
-    <div id="people"></div>
+    <div class="sidehead">
+      <span>Chats</span>
+      <button id="newDmBtn" title="New private chat">+</button>
+    </div>
+    <div id="chatList"></div>
+
+    <div id="peopleWrap">
+      <div class="sidehead">Members</div>
+      <div id="people"></div>
+    </div>
+
     <a class="consoleLink" id="consoleLink" href="/attack">
       <b>🕵 Attack console</b>
       <span>Separate device or window</span>
@@ -284,6 +366,14 @@
   </aside>
 
   <section id="chat">
+    <div id="locked">
+      <div class="big">🔒</div>
+      <div class="t">Private conversation</div>
+      <div class="d">You are in this room but not in this chat. Its contents are
+        not sent to you — only the participants' quantum witness can open it.</div>
+      <div class="stat" id="lockStat"></div>
+    </div>
+
     <div id="log"></div>
 
     <div id="composer">
@@ -293,6 +383,16 @@
     </div>
   </section>
 </main>
+
+<!-- ============ NEW DM PICKER ============ -->
+<div id="dmPicker">
+  <div class="card">
+    <h1 style="font-size:1rem;">New private chat</h1>
+    <p class="sub">Pick someone in this room. The conversation opens immediately.</p>
+    <div id="pickList"></div>
+    <button class="cancel" id="pickCancel">Cancel</button>
+  </div>
+</div>
 
 <script>
 const MAX_CHARS = {{ max_chars }};
@@ -309,10 +409,23 @@ let ws = null;
 let joined = false;
 let myId = null;
 let lastState = null;
-// Local timestamp of the most recent snapshot, used to age the countdown.
 let lastStateAt = 0;
 let reconnectTimer = null;
 let pingTimer = null;
+
+// Which conversation is open. Null means "show the group", which is where
+// everyone lands first -- nobody should have to hunt for the room's main chat.
+let activeConv = null;
+
+// Per-conversation unread tracking. Client-side only: the server has no notion
+// of "read", and adding one would mean persisting state per socket for no
+// security benefit. A timestamp per conversation is enough to count what
+// arrived while you were looking elsewhere.
+const lastSeen = {};
+
+// Last access attempt per conversation, so a locked chat can show the attacker's
+// own score back rather than pretending nothing was tried.
+const accessTried = {};
 
 const $ = id => document.getElementById(id);
 
@@ -340,9 +453,6 @@ $('jGo').onclick = () => {
 
 let pendingJoin = null;
 let joinMeta = null;
-// Shots per bit for this room's messages. Read from the join form and sent with
-// every message -- previously the form collected it and then dropped it, and
-// send() hardcoded 96, so the control did nothing at all.
 let SHOTS = 96;
 
 function connect() {
@@ -407,6 +517,21 @@ function handle(m) {
     return;
   }
   if (m.type === 'state') { render(m.state); return; }
+  if (m.type === 'dm_opened') {
+    // The server confirmed the conversation. Open it so the picker does not
+    // have to be closed and reopened manually.
+    activeConv = m.conversation.id;
+    $('dmPicker').classList.remove('show');
+    render(lastState);
+    return;
+  }
+  if (m.type === 'dm_access_result') {
+    accessTried[m.conversation_id] = m;
+    render(lastState);
+    showToast(m.granted ? 'Access granted — key matched the witness.'
+                        : 'Access denied — the witness did not match.', !m.granted);
+    return;
+  }
   if (m.type === 'reveal') { flashReveal(m.message_id); return; }
   if (m.type === 'error') {
     showToast(m.error, true);
@@ -415,8 +540,6 @@ function handle(m) {
   if (m.type === 'pong') return;
 }
 
-// Transient notice, used for validation errors now that the room has no panel
-// of its own to hold a message line.
 let toastTimer = null;
 function showToast(text, isError) {
   let el = $('toast');
@@ -450,7 +573,38 @@ function render(state) {
   // countdown does not drift by however far the two disagree.
   serverSkew = (state.server_time || 0) - lastStateAt;
 
-  // members
+  renderMembers(state);
+  renderChatList(state);
+
+  const conv = currentConv(state);
+  const locked = conv && conv.locked;
+  $('locked').classList.toggle('show', !!locked);
+  $('log').style.display = locked ? 'none' : 'flex';
+  $('composer').style.display = locked ? 'none' : 'flex';
+  if (locked) renderLockPanel(conv);
+
+  if (!locked) {
+    const visible = state.messages.filter(m => (m.conversation_id || null) === activeConv);
+    const log = $('log');
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    log.innerHTML = '';
+    visible.forEach(m => log.appendChild(bubble(m)));
+    if (atBottom) log.scrollTop = log.scrollHeight;
+
+    // Opening a chat clears its unread count.
+    lastSeen[activeConv || 'group'] = lastStateAt;
+  }
+
+  tickCountdowns();
+  markActiveChat();
+}
+
+function currentConv(state) {
+  if (activeConv === null) return null;
+  return (state.conversations || []).find(c => c.id === activeConv) || null;
+}
+
+function renderMembers(state) {
   const people = $('people');
   people.innerHTML = '';
   state.participants.forEach(p => {
@@ -462,15 +616,108 @@ function render(state) {
                 + (known && p.is_attacker ? '<span title="attacker">⚠</span>' : '');
     people.appendChild(d);
   });
+}
 
-  // messages
-  const log = $('log');
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-  log.innerHTML = '';
-  state.messages.forEach(m => log.appendChild(bubble(m)));
+function renderChatList(state) {
+  const list = $('chatList');
+  list.innerHTML = '';
 
-  if (atBottom) log.scrollTop = log.scrollHeight;
-  tickCountdowns();
+  // The group is always first and is not in state.conversations until something
+  // touches it, so it is synthesised here to guarantee it is always listed.
+  const groupMessages = state.messages.filter(m => !m.conversation_id);
+  const groupConv = (state.conversations || []).find(c => c.kind === 'group');
+  const rows = [{
+    id: null,
+    kind: 'group',
+    title: state.name || 'Group',
+    locked: false,
+    messages: groupMessages,
+  }];
+
+  (state.conversations || [])
+    .filter(c => c.kind !== 'group')
+    .forEach(c => rows.push({
+      id: c.id, kind: c.kind, title: c.title, locked: c.locked,
+      messages: state.messages.filter(m => m.conversation_id === c.id),
+    }));
+
+  rows.forEach(c => list.appendChild(chatRow(c)));
+}
+
+function chatRow(c) {
+  const el = document.createElement('div');
+  el.className = 'chat' + (c.locked ? ' locked' : '') +
+                 ((c.id || null) === activeConv ? ' active' : '');
+  el.dataset.conv = c.id || '';
+
+  const initials = (c.kind === 'group' ? '#' : (c.title || '?').slice(0, 2).toUpperCase());
+
+  // Never preview a locked chat. The server withholds the content, so a preview
+  // would have to come from somewhere else -- and rendering "3 messages" for a
+  // conversation you cannot read is itself a hint about its contents.
+  let preview;
+  if (c.locked) {
+    preview = '🔒 locked';
+  } else {
+    const last = c.messages[c.messages.length - 1];
+    preview = last ? previewOf(last) : 'no messages yet';
+  }
+
+  const seen = lastSeen[c.id || 'group'] || 0;
+  const unread = c.locked ? 0 : c.messages.filter(m => (m.created_at || 0) > seen).length;
+
+  el.innerHTML =
+    `<div class="av">${esc(initials)}</div>` +
+    `<div class="meta"><div class="nm2">${esc(c.title)}</div>` +
+    `<div class="pv">${esc(preview)}</div></div>` +
+    (unread ? `<div class="badge">${unread}</div>` : '');
+
+  el.onclick = () => {
+    activeConv = c.id;
+    render(lastState);
+    if (window.innerWidth <= 520) {
+      $('side').classList.add('hidden');
+    }
+    $('text').focus();
+  };
+  return el;
+}
+
+function previewOf(m) {
+  if (m.status === 'in_transit') return 'transmitting…';
+  if (m.status === 'queued') return 'encoding…';
+  if (m.status === 'delivered' && m.result) {
+    if (!m.result.ok) return 'transit failed';
+    const r = m.result;
+    const tag = (r.corrupted_count || 0) > 0 ? '⚠ ' : '';
+    return tag + (r.received_text || '');
+  }
+  return '';
+}
+
+function markActiveChat() {
+  document.querySelectorAll('.chat').forEach(el => {
+    const id = el.dataset.conv || null;
+    el.classList.toggle('active', id === activeConv);
+  });
+}
+
+function renderLockPanel(conv) {
+  const stat = $('lockStat');
+  const tried = accessTried[conv.id];
+  if (tried) {
+    const ok = tried.granted;
+    stat.innerHTML =
+      `last attempt: matched <b class="${ok ? '' : 'no'}">${pct(tried.match_rate)}</b> ` +
+      `of qubits · required <b>${pct(tried.threshold)}</b><br>` +
+      `<span style="color:#8fa0bf">${esc(tried.verdict || '')}</span>`;
+  } else {
+    stat.innerHTML = 'no access attempt made from this device';
+  }
+}
+
+function pct(v) {
+  return (v == null ? 0 : Math.round(v * 100)) + '%';
 }
 
 function bubble(m) {
@@ -548,8 +795,8 @@ function esc(s) {
 
 // ------------------------------------------------------------- countdown
 
-// `remaining` in a state snapshot is a value captured at broadcast time, and
-// the server does not broadcast again until the window closes. Reading it
+// `remaining` in a state snapshot is a value captured at broadcast time, and the
+// server does not broadcast again until the window closes. Reading it
 // directly therefore freezes the countdown for the whole transit window -- the
 // one thing on screen that has to move. Instead, note the clock skew once per
 // snapshot and subtract elapsed local time from it.
@@ -566,9 +813,9 @@ function tickCountdowns() {
     if (!bar || !secs) return;
 
     const left = Math.max(0, m.remaining - (now - lastStateAt));
-    const pct = Math.max(0, Math.min(100,
+    const pctv = Math.max(0, Math.min(100,
       left / (lastState.transit_seconds || 5) * 100));
-    bar.style.width = pct + '%';
+    bar.style.width = pctv + '%';
     secs.textContent = left.toFixed(1) + 's';
   });
 }
@@ -587,7 +834,7 @@ function send() {
     showToast('Message cannot be empty.', true);
     return;
   }
-  socketSend({ type: 'send', text: t, shots: SHOTS });
+  socketSend({ type: 'send', text: t, shots: SHOTS, conversation_id: activeConv });
   $('text').value = '';
   // Keep the keyboard up so a rapid back-and-forth demo stays fluid.
   $('text').focus();
@@ -595,6 +842,32 @@ function send() {
 
 $('sendBtn').onclick = send;
 $('text').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+
+// ------------------------------------------------------------- DM picker
+
+$('newDmBtn').onclick = () => {
+  if (!lastState) return;
+  const list = $('pickList');
+  list.innerHTML = '';
+  const others = lastState.participants.filter(p => p.id !== myId);
+  if (!others.length) {
+    list.innerHTML = `<p class="sub" style="margin:0;">Nobody else is in this room yet.</p>`;
+  }
+  others.forEach(p => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    const known = p.is_attacker;
+    d.innerHTML = `<span class="dot${known ? ' evil' : ''}"></span><span class="nm">${esc(p.name)}</span>`;
+    d.onclick = () => socketSend({ type: 'open_dm', peer_id: p.id });
+    list.appendChild(d);
+  });
+  $('dmPicker').classList.add('show');
+};
+
+$('pickCancel').onclick = () => $('dmPicker').classList.remove('show');
+$('dmPicker').onclick = e => { if (e.target === $('dmPicker')) $('dmPicker').classList.remove('show'); };
+
+$('backBtn').onclick = () => $('side').classList.remove('hidden');
 
 $('roomCode').onclick = async () => {
   try { await navigator.clipboard.writeText(location.origin + '/room?c=' + $('roomCode').textContent); } catch (e) {}
