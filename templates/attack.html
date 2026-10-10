@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Attack Console — QDS Room {{ code or '' }}</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  :root {
+    --bg: #0b1120; --panel: #131c31; --panel2: #1b2540; --line: #26324d;
+    --text: #e6ecf7; --muted: #8fa0bf; --accent: #4f8cff;
+    --good: #2ee6a8; --warn: #ffb020; --bad: #ff5470;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100dvh; display: flex; flex-direction: column;
+  }
+
+  header {
+    background: #1a1020; border-bottom: 1px solid #4a1f38;
+    padding: 0.6rem 0.85rem; display: flex; align-items: center; gap: 0.6rem;
+  }
+  .skull { font-size: 1.1rem; }
+  #roomCode { font-family: ui-monospace, Menlo, monospace; font-weight: 700;
+              letter-spacing: 0.08em; color: var(--bad); }
+  #roomName { flex: 1; color: var(--muted); font-size: 0.85rem;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #connDot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  #connDot.live { background: var(--good); box-shadow: 0 0 8px var(--good); }
+  #connDot.down { background: var(--bad); }
+
+  main { flex: 1; padding: 0.85rem; display: flex; flex-direction: column; gap: 0.8rem; }
+
+  /* window status */
+  #win {
+    border-radius: 12px; padding: 0.85rem; text-align: center;
+    border: 1px solid var(--line); background: var(--panel);
+  }
+  #win.open { border-color: var(--warn); background: #241d10;
+              animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(255,176,32,0.35); }
+    50%     { box-shadow: 0 0 0 6px rgba(255,176,32,0); }
+  }
+  #winLbl { font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase;
+            color: var(--muted); font-weight: 700; }
+  #win.open #winLbl { color: var(--warn); }
+  #winSecs { font-family: ui-monospace, Menlo, monospace; font-size: 2.1rem;
+             font-weight: 700; margin: 0.15rem 0; }
+  #win.open #winSecs { color: var(--warn); }
+  #winHint { font-size: 0.72rem; color: var(--muted); }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 0.85rem;
+  }
+  .card h3 { margin: 0 0 0.5rem; font-size: 0.68rem; letter-spacing: 0.12em;
+             text-transform: uppercase; color: var(--muted); }
+
+  select, input[type=text] {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 9px;
+    padding: 0.65rem; font-size: 0.88rem; margin-bottom: 0.5rem;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--bad); }
+  .lbl { font-size: 0.68rem; color: var(--muted); margin: 0.4rem 0 0.25rem;
+         letter-spacing: 0.06em; text-transform: uppercase; }
+
+  /* attack list */
+  .atk {
+    border: 1px solid var(--line); border-radius: 9px; margin-bottom: 0.45rem;
+    overflow: hidden; background: var(--panel2);
+  }
+  .atk.sel { border-color: var(--bad); background: #2a1220; }
+  .atk .hd {
+    padding: 0.6rem 0.7rem; font-size: 0.85rem; font-weight: 600;
+    cursor: pointer; display: flex; align-items: center; gap: 0.5rem;
+  }
+  .atk.head { border-color: var(--bad); }
+  .atk .hd .tag {
+    font-size: 0.55rem; background: var(--bad); color: #fff; padding: 0.1rem 0.35rem;
+    border-radius: 4px; letter-spacing: 0.08em; font-weight: 700; margin-left: auto;
+  }
+  .atk .bd { padding: 0 0.7rem 0.65rem; display: none; }
+  .atk.sel .bd { display: block; }
+  .atk .why { font-size: 0.7rem; color: var(--muted); line-height: 1.45;
+              margin: -0.15rem 0 0.5rem; }
+  .sug {
+    width: 100%; background: #2a1220; color: var(--bad);
+    border: 1px solid var(--bad); border-radius: 8px;
+    padding: 0.5rem; font-size: 0.72rem; font-weight: 700; cursor: pointer;
+  }
+  .sugout { font-size: 0.72rem; color: var(--muted); margin-top: 0.35rem;
+            line-height: 1.45; }
+  .sugout b { color: var(--warn); }
+
+  #inject {
+    width: 100%; background: var(--bad); color: #fff; border: 0;
+    border-radius: 11px; padding: 0.9rem; font-weight: 700; font-size: 1rem;
+    cursor: pointer; letter-spacing: 0.04em;
+  }
+  #inject:disabled { background: #3a2430; color: #6b5560; cursor: not-allowed; }
+  #msg { font-size: 0.78rem; margin-top: 0.5rem; text-align: center; min-height: 1.1rem; }
+  #msg.ok { color: var(--good); }
+  #msg.err { color: var(--warn); }
+
+  /* activity log */
+  #log { max-height: 190px; overflow-y: auto; }
+  .entry { font-size: 0.74rem; padding: 0.35rem 0; border-bottom: 1px solid var(--line);
+           line-height: 1.4; }
+  .entry:last-child { border-bottom: 0; }
+  .entry .t { color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+  .entry .v { color: var(--text); }
+  .entry.evil .v { color: var(--bad); }
+
+  /* join */
+  #join { position: fixed; inset: 0; background: var(--bg); z-index: 50;
+          display: flex; align-items: center; justify-content: center; padding: 1.2rem; }
+  #join.hidden { display: none; }
+  #join .card { max-width: 360px; width: 100%; border-color: #4a1f38; }
+  #join h1 { margin: 0 0 0.2rem; font-size: 1.15rem; }
+  #join p.sub { margin: 0 0 1rem; color: var(--muted); font-size: 0.8rem; line-height: 1.45; }
+  .warnbox { font-size: 0.72rem; color: var(--warn); background: #241d10;
+             border: 1px solid #4a3a12; border-radius: 8px; padding: 0.5rem;
+             line-height: 1.45; margin-bottom: 0.85rem; }
+</style>
+</head>
+<body>
+
+<div id="join">
+  <div class="card">
+    <h1>🕵 Attack Console</h1>
+    <p class="sub">Operator console for the quantum channel. You can only act
+      while a message is in transit.</p>
+
+    <div class="warnbox">This console is <b>separate from the room</b>. Room
+      participants cannot see this page. Your name appears in the room as an
+      ordinary member until a message is delivered and the reveal fires.</div>
+
+    <label class="lbl">Operator name</label>
+    <input type="text" id="jName" placeholder="e.g. Eve" autocomplete="off">
+
+    <label class="lbl">Room code</label>
+    <input type="text" id="jRoom" placeholder="e.g. ABCD" autocomplete="off"
+           style="text-transform:uppercase;">
+
+    <button class="go" id="jGo"
+            style="width:100%;background:var(--bad);color:#fff;border:0;border-radius:9px;padding:0.75rem;font-weight:700;font-size:0.92rem;cursor:pointer;">
+      ATTACH TO CHANNEL</button>
+  </div>
+</div>
+
+<header>
+  <span class="skull">🕵</span>
+  <span id="roomCode">····</span>
+  <span id="roomName">not attached</span>
+  <div id="connDot"></div>
+</header>
+
+<main>
+  <div id="win">
+    <div id="winLbl">Channel idle</div>
+    <div id="winSecs">—</div>
+    <div id="winHint">Waiting for traffic</div>
+  </div>
+
+  <div class="card">
+    <h3>Target</h3>
+    <select id="tgt"><option value="">no message in transit</option></select>
+  </div>
+
+  <div class="card">
+    <h3>Attack</h3>
+    <div id="atkList"></div>
+  </div>
+
+  <div class="card">
+    <button id="inject" disabled>⚡ INJECT</button>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card">
+    <h3>Activity</h3>
+    <div id="log"><div class="entry"><span class="v" style="color:#8fa0bf">idle</span></div></div>
+  </div>
+</main>
+
+<script>
+const ATTACKS = {{ attacks | tojson }};
+const MAX_CHARS = {{ max_chars }};
+const MIN_CHARS = {{ min_chars }};
+
+// A distinct storage key from the room's. Sharing one would make the console and
+// the room collide on the same participant id when opened on the same device,
+// which silently overwrites the room's client registration.
+const CID = (() => {
+  let v = localStorage.getItem('qds_atk_cid');
+  if (!v) { v = 'a' + Math.random().toString(36).slice(2, 14);
+            localStorage.setItem('qds_atk_cid', v); }
+  return v;
+})();
+
+let ws = null, myId = null, joined = false, targetMsgId = null;
+let lastState = null, lastStateAt = 0;
+let pendingJoin = null, joinMeta = null;
+let selected = 'forgery_substitute';
+let injectedThisWindow = false;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Replace-text leads deliberately: it is the most legible attack on screen --
+// the room reads a completely different sentence -- and it exercises the
+// quantum witness rather than per-bit comparison.
+const ORDER = ['forgery_substitute', 'forgery', 'replay', 'impersonation', 'channel_manipulation'];
+
+const META = {
+  forgery_substitute: {
+    tag: 'STRONGEST',
+    why: 'Eve sends her own wording. Per-bit comparison flags a changed message, but that presumes Bob already holds Alice\'s plaintext. The quantum witness is what actually rejects it.',
+    field: 'text',
+  },
+  forgery: {
+    why: 'Inverts specific bits in the channel. The most surgical attack: two or three flipped characters.',
+    field: 'bits',
+  },
+  replay: {
+    why: 'Re-sends a genuine, previously-signed message with its own witness. The quantum check PASSES. Only the context binding catches it.',
+    field: 'text',
+  },
+  impersonation: {
+    why: 'Eve submits a message as though she were Alice.',
+    field: 'none',
+  },
+  channel_manipulation: {
+    why: 'Perturbs the channel so the failure looks like hardware noise rather than an attack.',
+    field: 'none',
+  },
+};
+
+// ---------------------------------------------------------------- transport
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/room`);
+
+  ws.onopen = () => {
+    setConn('live');
+    if (pendingJoin) { socketSend(pendingJoin); pendingJoin = null; }
+  };
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    handle(m);
+  };
+  ws.onclose = () => {
+    setConn('down');
+    if (joined) setTimeout(() => { connect(); if (joinMeta) socketSend(joinMeta); }, 1500);
+  };
+  ws.onerror = () => setConn('down');
+}
+
+function socketSend(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+function setConn(c) { $('connDot').className = c; }
+
+// ---------------------------------------------------------------- inbound
+
+function handle(m) {
+  if (m.type === 'joined') {
+    joined = true; myId = m.you.id;
+    joinMeta = { type: 'join', client_id: CID, name: m.you.name,
+                 code: m.room, is_attacker: true };
+    $('join').classList.add('hidden');
+    $('roomCode').textContent = m.room;
+    $('roomName').textContent = m.room_name;
+    render(m.state);
+    return;
+  }
+  if (m.type === 'state') { render(m.state); return; }
+  if (m.type === 'attack_accepted') {
+    $('msg').className = 'ok';
+    $('msg').textContent = '✓ injected — it is in the channel now';
+    log('injected ' + m.attack, true);
+    return;
+  }
+  if (m.type === 'error') { $('msg').className = 'err'; $('msg').textContent = m.error; return; }
+}
+
+function log(text, evil) {
+  const box = $('log');
+  if (box.querySelector('.entry .v') && box.children.length === 1 &&
+      box.textContent.trim() === 'idle') box.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = 'entry' + (evil ? ' evil' : '');
+  d.innerHTML = `<span class="t">${new Date().toLocaleTimeString()}</span> <span class="v">${esc(text)}</span>`;
+  box.insertBefore(d, box.firstChild);
+}
+
+// ---------------------------------------------------------------- render
+
+function render(state) {
+  lastState = state;
+  lastStateAt = Date.now() / 1000;
+  const live = state.messages.filter(m => m.status === 'in_transit');
+
+  const win = $('win');
+  if (live.length) {
+    const left = Math.max(0, live[0].remaining || 0);
+    win.classList.add('open');
+    $('winLbl').textContent = 'Window open — act now';
+    $('winSecs').textContent = left.toFixed(1) + 's';
+    $('winHint').textContent = 'channel exposed';
+    if (targetMsgId !== live[0].id) {
+      targetMsgId = live[0].id;
+      injectedThisWindow = false;
+    }
+  } else {
+    win.classList.remove('open');
+    $('winLbl').textContent = 'Channel idle';
+    $('winSecs').textContent = '—';
+    $('winHint').textContent = 'Waiting for traffic';
+    if (targetMsgId) { targetMsgId = null; injectedThisWindow = false; }
+  }
+
+  const sel = $('tgt');
+  sel.innerHTML = live.length
+    ? live.map(m => `<option value="${m.id}">${esc(m.sender)} — in transit</option>`).join('')
+    : '<option value="">no message in transit</option>';
+  if (targetMsgId) sel.value = targetMsgId;
+
+  $('inject').disabled = !targetMsgId;
+}
+
+setInterval(() => {
+  if (!lastState) return;
+  const live = lastState.messages.filter(m => m.status === 'in_transit');
+  if (!live.length) return;
+  // Age the snapshot's `remaining` locally. The server does not rebroadcast
+  // during the window, so reading the stored value would leave the operator
+  // staring at a frozen number for the entire time they have to act -- the one
+  // number that has to be trustworthy is the time remaining.
+  const elapsed = Date.now() / 1000 - lastStateAt;
+  const left = Math.max(0, (live[0].remaining || 0) - elapsed);
+  $('winSecs').textContent = left.toFixed(1) + 's';
+}, 100);
+
+// ---------------------------------------------------------------- attack UI
+
+function buildAttackList() {
+  const box = $('atkList');
+  box.innerHTML = '';
+  ORDER.filter(k => ATTACKS[k]).forEach(k => {
+    const meta = META[k] || { why: '', field: 'none' };
+    const d = document.createElement('div');
+    d.className = 'atk' + (k === selected ? ' sel' : '') + (meta.tag ? ' head' : '');
+    d.dataset.kind = k;
+
+    let fieldHtml = '';
+    if (meta.field === 'bits') {
+      fieldHtml = `<div class="lbl">Bit indices</div>
+                   <input type="text" id="fBits" placeholder="40,41,42,43">
+                   <button type="button" class="sug" id="fSuggest">⚡ SUGGEST LEGIBLE TARGETS</button>
+                   <div class="sugout" id="fSugOut"></div>`;
+    } else if (meta.field === 'text') {
+      // No minlength on purpose. A replacement is the attacker's payload, not a
+      // message that will itself be attacked, so it is allowed to be short.
+      fieldHtml = `<div class="lbl">${k === 'replay'
+          ? 'Replacement message (a genuine earlier message)' : 'Replacement message'}</div>
+                   <input type="text" id="fText" placeholder="PAYROLL APPROVED" maxlength="${MAX_CHARS}">`;
+    }
+
+    d.innerHTML = `<div class="hd"><span>${esc(ATTACKS[k])}</span>
+                     ${meta.tag ? `<span class="tag">${meta.tag}</span>` : ''}</div>
+                   <div class="bd"><div class="why">${esc(meta.why)}</div>${fieldHtml}</div>`;
+
+    d.querySelector('.hd').onclick = () => {
+      selected = k;
+      document.querySelectorAll('.atk').forEach(x => x.classList.remove('sel'));
+      d.classList.add('sel');
+      $('msg').textContent = '';
+      wireSuggest();
+    };
+    box.appendChild(d);
+  });
+  wireSuggest();
+}
+
+// Suggests bit positions that produce visible corruption. Without this the
+// default is a random low bit, which shifts one letter by an alphabet step and
+// looks like a typo rather than an interception.
+function wireSuggest() {
+  const b = $('fSuggest');
+  if (!b) return;
+  b.onclick = async () => {
+    if (!lastState) return;
+    // The message being attacked is identified by id, not by text. The plaintext
+    // is withheld during transit by design, so the console cannot read it --
+    // which is correct, and also why this asks the server instead.
+    const mid = targetMsgId;
+    if (!mid) { $('fSugOut').textContent = 'No message in transit.'; return; }
+
+    const out = $('fSugOut');
+    out.textContent = 'computing…';
+    try {
+      const r = await fetch('/api/suggest_bits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: mid }),
+      });
+      const j = await r.json();
+      if (!j.ok) { out.textContent = j.error || 'Could not compute.'; return; }
+      $('fBits').value = j.positions.join(',');
+      out.innerHTML = `<b>${esc(j.result_text)}</b><br>${j.positions.length} position(s) chosen so the damage is legible.`;
+    } catch (e) {
+      out.textContent = 'Suggestion failed.';
+    }
+  };
+}
+
+$('inject').onclick = () => {
+  if (!targetMsgId) return;
+  const meta = META[selected] || { field: 'none' };
+  const params = {};
+
+  if (meta.field === 'bits') {
+    params.target_bits = ($('fBits') && $('fBits').value || '').trim();
+    if (!params.target_bits) {
+      $('msg').className = 'err'; $('msg').textContent = 'Enter bit indices.'; return;
+    }
+  } else if (meta.field === 'text') {
+    params.substitute = ($('fText') && $('fText').value || '').trim();
+    if (!params.substitute) {
+      $('msg').className = 'err'; $('msg').textContent = 'Enter a replacement message.'; return;
+    }
+  }
+
+  $('msg').className = '';
+  $('msg').textContent = 'injecting…';
+  log('injecting ' + selected);
+  socketSend({ type: 'attack', message_id: targetMsgId, attack: selected, params });
+};
+
+// ---------------------------------------------------------------- join
+
+$('jGo').onclick = () => {
+  const name = $('jName').value.trim() || 'Eve';
+  const code = $('jRoom').value.trim().toUpperCase();
+  pendingJoin = { type: 'join', client_id: CID, name, code, is_attacker: true };
+  socketSend(pendingJoin);
+  if (!ws || ws.readyState !== 1) { /* flushed in onopen */ }
+};
+
+(function init() {
+  buildAttackList();
+  const p = new URLSearchParams(location.search);
+  const code = (p.get('c') || '').toUpperCase();
+  if (code) $('jRoom').value = code;
+  try { $('jName').value = localStorage.getItem('qds_atk_name') || 'Eve'; } catch (e) {}
+  connect();
+})();
+</script>
+</body>
+</html>

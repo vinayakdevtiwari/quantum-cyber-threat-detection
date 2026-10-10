@@ -1,0 +1,30 @@
+# Streamlit configuration for the QDS dashboard.
+
+[theme]
+base = "dark"
+primaryColor = "#00ff88"
+backgroundColor = "#0e0e14"
+secondaryBackgroundColor = "#161b22"
+textColor = "#c9d1d9"
+font = "sans serif"
+
+# Disable the auto-reload file watcher.
+#
+# WHY: the two-phone demo writes to qds_sessions.db on every attack, and
+# Streamlit's watcher treats that file change as a source edit. The result is
+# the dashboard reloading at random moments -- typically mid-demo, right when
+# a phone attack lands. Disabling the watcher stops that.
+#
+# The trade-off is that editing app.py no longer hot-reloads; you must restart
+# the dashboard instead. For a live demo that is the right trade: a stable
+# screen beats a convenient dev loop, and Ctrl+C / rerun is a two-second
+# restart anyway.
+[server]
+fileWatcherType = "none"
+
+# Do not open a browser automatically; run_demo.bat handles that.
+headless = true
+
+# Avoid accumulating stale websocket connections across many demo restarts.
+enableCORS = false
+enableXsrfProtection = false

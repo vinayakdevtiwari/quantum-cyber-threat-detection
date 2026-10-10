@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>QDS Room — Quantum Digital Signature Channel</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  :root {
+    --bg: #0b1120;
+    --panel: #131c31;
+    --panel2: #1b2540;
+    --line: #26324d;
+    --text: #e6ecf7;
+    --muted: #8fa0bf;
+    --accent: #4f8cff;
+    --good: #2ee6a8;
+    --warn: #ffb020;
+    --bad: #ff5470;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ---- top bar ---- */
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 0.55rem 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+  }
+  .roomid {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.25rem 0.55rem;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  #roomName { font-weight: 600; font-size: 0.95rem; flex: 1;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #connDot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--muted); flex-shrink: 0;
+  }
+  #connDot.live { background: var(--good); box-shadow: 0 0 8px var(--good); }
+  #connDot.down { background: var(--bad); }
+
+  /* ---- layout ---- */
+  main { flex: 1; display: flex; min-height: 0; }
+
+  /* participants panel */
+  #side {
+    width: 168px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 0.6rem 0.5rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .sidehead {
+    font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); font-weight: 700; margin-bottom: 0.15rem;
+  }
+  .person {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.35rem 0.4rem; border-radius: 7px; font-size: 0.82rem;
+  }
+  .person.me { background: var(--panel2); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex-shrink: 0; }
+  .dot.evil { background: var(--bad); }
+  .person .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  #consoleLink {
+    margin-top: auto;
+    display: block;
+    text-decoration: none;
+    background: #1a1020;
+    border: 1px solid #4a1f38;
+    border-radius: 9px;
+    padding: 0.55rem 0.5rem;
+    color: var(--bad);
+    text-align: center;
+  }
+  #consoleLink b { display: block; font-size: 0.72rem; }
+  #consoleLink span { display: block; font-size: 0.6rem; color: var(--muted); margin-top: 0.15rem; }
+
+  /* chat column */
+  #chat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.7rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .bubble {
+    max-width: 88%;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    padding: 0.5rem 0.65rem;
+  }
+  .bubble.mine { align-self: flex-end; background: #1d2f52; border-color: #2f4a7a; }
+  .who { font-size: 0.68rem; font-weight: 700; color: var(--accent); margin-bottom: 0.15rem; }
+  .body { font-size: 0.92rem; word-break: break-word; }
+
+  /* in-transit bubble */
+  .bubble.transit {
+    border-color: var(--warn);
+    background: #241d10;
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,176,32,0.35); }
+    50%      { box-shadow: 0 0 0 5px rgba(255,176,32,0); }
+  }
+  .transitrow { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.3rem; }
+  .bar { flex: 1; height: 5px; background: #3a2c12; border-radius: 3px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--warn); width: 100%;
+             transition: width 0.12s linear; }
+  .secs { font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem;
+          color: var(--warn); font-weight: 700; min-width: 3.4rem; text-align: right; }
+
+  /* attack banner on a delivered message */
+  .hit {
+    margin-top: 0.4rem; padding: 0.35rem 0.45rem; border-radius: 7px;
+    background: #2a1220; border: 1px solid #5c2038; font-size: 0.72rem;
+  }
+  .hit .lbl { color: var(--bad); font-weight: 700; letter-spacing: 0.04em; }
+  .hit .who2 { color: var(--text); }
+  .clean { margin-top: 0.35rem; font-size: 0.72rem; color: var(--good); }
+
+  /* bit diff */
+  .diff { margin-top: 0.4rem; font-family: ui-monospace, Menlo, monospace;
+          font-size: 0.7rem; line-height: 1.35; word-break: break-all;
+          background: #0d1526; border: 1px solid var(--line);
+          border-radius: 6px; padding: 0.35rem; }
+  .diff .ok { color: #3c4a66; }
+  .diff .bad { color: var(--bad); background: #3d1424; font-weight: 700; }
+
+  /* transient notice for validation errors */
+  #toast {
+    font-family: inherit;
+  }
+
+  /* composer */
+  #composer {
+    display: flex; gap: 0.45rem; padding: 0.55rem 0.7rem 0.7rem;
+    border-top: 1px solid var(--line); background: var(--panel); flex-shrink: 0;
+  }
+  #text {
+    flex: 1; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 20px;
+    padding: 0.6rem 0.85rem; font-size: 0.92rem;
+  }
+  #text:focus { outline: none; border-color: var(--accent); }
+  #sendBtn {
+    background: var(--accent); color: #fff; border: 0; border-radius: 50%;
+    width: 42px; height: 42px; font-size: 1.1rem; cursor: pointer; flex-shrink: 0;
+  }
+
+  /* ---- join screen ---- */
+  #join {
+    position: fixed; inset: 0; background: var(--bg); z-index: 50;
+    display: flex; align-items: center; justify-content: center; padding: 1.2rem;
+  }
+  #join.hidden { display: none; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 1.3rem; width: 100%; max-width: 360px;
+  }
+  .card h1 { margin: 0 0 0.2rem; font-size: 1.15rem; }
+  .card p.sub { margin: 0 0 1rem; color: var(--muted); font-size: 0.8rem; line-height: 1.45; }
+  .card label { display: block; font-size: 0.7rem; color: var(--muted);
+                text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 0.25rem; }
+  .card input[type=text], .card input[type=number] {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 0.6rem; font-size: 0.9rem; margin-bottom: 0.8rem;
+  }
+  .card .row2 { display: flex; gap: 0.6rem; }
+  .card .row2 > div { flex: 1; }
+  .card button.go {
+    width: 100%; background: var(--accent); color: #fff; border: 0;
+    border-radius: 9px; padding: 0.7rem; font-weight: 700; font-size: 0.92rem;
+    cursor: pointer;
+  }
+  .note { font-size: 0.68rem; color: var(--muted); line-height: 1.45;
+          margin-top: 0.8rem; border-top: 1px solid var(--line); padding-top: 0.7rem; }
+
+  @media (max-width: 480px) {
+    #side { width: 122px; }
+    .bubble { max-width: 94%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ JOIN ============ -->
+<div id="join">
+  <div class="card">
+    <h1>Quantum Secure Channel</h1>
+    <p class="sub">Group room over a quantum key-distribution link. Messages are
+      teleported bit by bit. During transit the channel is exposed — that window
+      is where an attacker operates.</p>
+
+    <label>Your name</label>
+    <input type="text" id="jName" placeholder="e.g. Alice" autocomplete="off">
+
+    <label>Room code</label>
+    <input type="text" id="jRoom" placeholder="leave blank to create" autocomplete="off"
+           style="text-transform:uppercase;">
+
+    <div class="row2">
+      <div>
+        <label>Transit window (s)</label>
+        <input type="number" id="jTransit" value="{{ default_transit }}" min="1" max="15" step="1">
+        <div class="hint" style="font-size:0.62rem;color:#8fa0bf;margin-top:-0.3rem;">
+          How long a message stays exposed to interception.</div>
+      </div>
+      <div>
+        <label>Shots / bit</label>
+        <input type="number" id="jShots" value="96" min="64" max="512" step="32">
+        <div class="hint" style="font-size:0.62rem;color:#8fa0bf;margin-top:-0.3rem;">
+          Quantum samples per bit. Higher = steadier but slower.</div>
+      </div>
+    </div>
+
+    <button class="go" id="jGo">ENTER ROOM</button>
+
+    <div class="note">
+      Up to {{ max_chars }} characters per message — short messages work fine.
+      Every message spends its full transit window exposed to interception
+      before it is delivered.<br><br>
+      Attacking? Open <b>/attack</b> with the room code — the console is a
+      separate page and can run on another device.
+    </div>
+  </div>
+</div>
+
+<!-- ============ ROOM ============ -->
+<header>
+  <div class="roomid" id="roomCode">····</div>
+  <div id="roomName">room</div>
+  <div id="connDot"></div>
+</header>
+
+<main>
+  <aside id="side">
+    <div class="sidehead">Members</div>
+    <div id="people"></div>
+    <a class="consoleLink" id="consoleLink" href="/attack">
+      <b>🕵 Attack console</b>
+      <span>Separate device or window</span>
+    </a>
+  </aside>
+
+  <section id="chat">
+    <div id="log"></div>
+
+    <div id="composer">
+      <input type="text" id="text" placeholder="Type a message… (up to {{ max_chars }} characters)"
+             maxlength="{{ max_chars }}">
+      <button id="sendBtn">&#10148;</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const MAX_CHARS = {{ max_chars }};
+const MIN_CHARS = {{ min_chars }};
+
+// Identity persists across reloads so a phone that refreshes keeps its seat.
+const CID = (() => {
+  let v = localStorage.getItem('qds_cid');
+  if (!v) { v = Math.random().toString(36).slice(2, 14); localStorage.setItem('qds_cid', v); }
+  return v;
+})();
+
+let ws = null;
+let joined = false;
+let myId = null;
+let lastState = null;
+// Local timestamp of the most recent snapshot, used to age the countdown.
+let lastStateAt = 0;
+let reconnectTimer = null;
+let pingTimer = null;
+
+const $ = id => document.getElementById(id);
+
+function store(name) { try { return localStorage.getItem('qds_name_' + name) || ''; } catch (e) { return ''; } }
+function saveName(name) { try { localStorage.setItem('qds_name_' + name, name); } catch (e) {} }
+
+// ---------------------------------------------------------------- join
+
+$('jGo').onclick = () => {
+  const name = $('jName').value.trim() || 'anon';
+  const code = $('jRoom').value.trim().toUpperCase();
+  const transit = Math.max(1, Math.min(15, parseInt($('jTransit').value, 10) || 5));
+  SHOTS = Math.max(64, Math.min(512, parseInt($('jShots').value, 10) || 96));
+
+  saveName(code || 'new');
+
+  // The room is always honest membership. Anyone attacking uses the console at
+  // /attack, which joins as a separate participant in its own right.
+  socketSend({ type: 'join', client_id: CID, name, code, transit, is_attacker: false });
+  if (!ws || ws.readyState !== 1) {
+    // Socket not open yet; queue the join and let onopen flush it.
+    pendingJoin = { type: 'join', client_id: CID, name, code, transit, is_attacker: false };
+  }
+};
+
+let pendingJoin = null;
+let joinMeta = null;
+// Shots per bit for this room's messages. Read from the join form and sent with
+// every message -- previously the form collected it and then dropped it, and
+// send() hardcoded 96, so the control did nothing at all.
+let SHOTS = 96;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/room`);
+
+  ws.onopen = () => {
+    setConn('live');
+    if (pendingJoin) { socketSend(pendingJoin); pendingJoin = null; }
+    clearInterval(pingTimer);
+    pingTimer = setInterval(() => socketSend({ type: 'ping' }), 20000);
+  };
+
+  ws.onmessage = ev => {
+    let m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    handle(m);
+  };
+
+  ws.onclose = () => {
+    setConn('down');
+    clearInterval(pingTimer);
+    // Reconnect and rejoin automatically. A phone locking its screen or
+    // hopping between access points must not require the demo to be restarted.
+    if (joined) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        connect();
+        if (joinMeta) socketSend(joinMeta);
+      }, 1500);
+    }
+  };
+
+  ws.onerror = () => setConn('down');
+}
+
+function socketSend(obj) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+function setConn(cls) {
+  const d = $('connDot');
+  d.className = cls;
+}
+
+// ---------------------------------------------------------------- inbound
+
+function handle(m) {
+  if (m.type === 'joined') {
+    joined = true;
+    myId = m.you.id;
+    joinMeta = { type: 'join', client_id: CID, name: m.you.name,
+                 code: m.room, is_attacker: m.you.is_attacker };
+    $('join').classList.add('hidden');
+    $('roomCode').textContent = m.room;
+    $('roomName').textContent = m.room_name;
+    // Carry the room code into the console URL so the operator does not have to
+    // read four characters off a phone screen and type them.
+    $('consoleLink').href = '/attack?c=' + encodeURIComponent(m.room);
+    render(m.state);
+    $('text').focus();
+    return;
+  }
+  if (m.type === 'state') { render(m.state); return; }
+  if (m.type === 'reveal') { flashReveal(m.message_id); return; }
+  if (m.type === 'error') {
+    showToast(m.error, true);
+    return;
+  }
+  if (m.type === 'pong') return;
+}
+
+// Transient notice, used for validation errors now that the room has no panel
+// of its own to hold a message line.
+let toastTimer = null;
+function showToast(text, isError) {
+  let el = $('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);' +
+      'bottom:5.5rem;background:#2a1220;border:1px solid #5c2038;color:#ff5470;' +
+      'padding:0.55rem 0.9rem;border-radius:9px;font-size:0.78rem;z-index:40;' +
+      'max-width:88%;text-align:center;';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.style.display = 'none', 3200);
+}
+
+function flashReveal(mid) {
+  const el = document.querySelector(`[data-mid="${mid}"]`);
+  if (el) { el.classList.add('justrevealed'); setTimeout(() => el.classList.remove('justrevealed'), 1200); }
+}
+
+// ---------------------------------------------------------------- render
+
+function render(state) {
+  if (!state) return;
+  lastState = state;
+  lastStateAt = Date.now() / 1000;
+  // Phones and the laptop share no clock. Correct once per snapshot so the
+  // countdown does not drift by however far the two disagree.
+  serverSkew = (state.server_time || 0) - lastStateAt;
+
+  // members
+  const people = $('people');
+  people.innerHTML = '';
+  state.participants.forEach(p => {
+    const d = document.createElement('div');
+    d.className = 'person' + (p.id === myId ? ' me' : '');
+    const known = p.is_attacker !== null && p.is_attacker !== undefined;
+    d.innerHTML = `<span class="dot${known && p.is_attacker ? ' evil' : ''}"></span>`
+                + `<span class="nm">${esc(p.name)}</span>`
+                + (known && p.is_attacker ? '<span title="attacker">⚠</span>' : '');
+    people.appendChild(d);
+  });
+
+  // messages
+  const log = $('log');
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  log.innerHTML = '';
+  state.messages.forEach(m => log.appendChild(bubble(m)));
+
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  tickCountdowns();
+}
+
+function bubble(m) {
+  const el = document.createElement('div');
+  const flying = m.status === 'in_transit' || m.status === 'queued';
+  el.className = 'bubble' + (m.mine ? ' mine' : '') + (flying ? ' transit' : '');
+  el.dataset.mid = m.id;
+
+  let h = `<div class="who">${esc(m.sender)}</div>`;
+
+  if (flying) {
+    // No plaintext before delivery -- not even for the sender. `queued` used to
+    // fall through to the else branch and render the real text for a moment
+    // before flipping to "transmitting", which read as a glitch and leaked the
+    // message ahead of the channel. The server now withholds it too.
+    if (m.status === 'queued') {
+      h += `<div class="body" style="color:#8fa0bf;font-style:italic">encoding…</div>`;
+    } else {
+      h += `<div class="body" style="color:#8fa0bf;font-style:italic">transmitting…</div>`;
+      h += `<div class="transitrow">
+              <div class="bar"><i data-bar="${m.id}"></i></div>
+              <span class="secs" data-secs="${m.id}">—</span>
+            </div>`;
+      h += `<div class="clean" style="color:#8fa0bf">exposed to interception</div>`;
+    }
+  } else if (m.status === 'delivered' && m.result) {
+    const r = m.result;
+    if (!r.ok) {
+      h += `<div class="body" style="color:#ff5470">transit failed: ${esc(r.error || '')}</div>`;
+    } else {
+      const attacked = (r.corrupted_count || 0) > 0;
+      h += `<div class="body">${esc(r.received_text || '')}</div>`;
+
+      if (attacked || m.attack_count > 0) {
+        h += `<div class="hit">`;
+        h += `<div class="lbl">⚠ INTERCEPTED — ${r.corrupted_count}/${r.total_bits} bits altered</div>`;
+        m.attacks.forEach(a => {
+          h += `<div>· <span class="who2">${esc(a.attacker)}</span> — ${esc(a.effect || a.attack)}</div>`;
+        });
+        h += `<div style="margin-top:.25rem;color:#8fa0bf">verdict: <b>${esc(r.verdict || '')}</b></div>`;
+        if (r.witness && r.witness.context_verdict) {
+          h += `<div style="color:#8fa0bf">context: <b>${esc(r.witness.context_verdict)}</b></div>`;
+        }
+        h += `</div>`;
+        h += bitDiff(r);
+      } else {
+        h += `<div class="clean">✓ intact — no interference</div>`;
+      }
+    }
+  } else {
+    // Defensive: a delivered message with no result should still not fall back
+    // to `m.text`, because the server only sets it once verification has run.
+    h += `<div class="body" style="color:#8fa0bf;font-style:italic">encoding…</div>`;
+  }
+
+  el.innerHTML = h;
+  return el;
+}
+
+function bitDiff(r) {
+  // Only show the differing bits, not all 96 of them. A full dump is noise on
+  // a phone and buries the two or three bits that actually matter.
+  const idx = r.corrupted_indices || [];
+  if (!idx.length) return '';
+  const shown = idx.slice(0, 24);
+  const parts = shown.map(i => `<span class="bad">${i}</span>`);
+  const more = idx.length > shown.length ? ` <span class="ok">+${idx.length - shown.length} more</span>` : '';
+  return `<div class="diff">altered bits → ${parts.join(' ')}${more}</div>`;
+}
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ------------------------------------------------------------- countdown
+
+// `remaining` in a state snapshot is a value captured at broadcast time, and
+// the server does not broadcast again until the window closes. Reading it
+// directly therefore freezes the countdown for the whole transit window -- the
+// one thing on screen that has to move. Instead, note the clock skew once per
+// snapshot and subtract elapsed local time from it.
+let serverSkew = 0;
+
+function tickCountdowns() {
+  if (!lastState) return;
+  const now = Date.now() / 1000 + serverSkew;
+
+  lastState.messages.forEach(m => {
+    if (m.status !== 'in_transit') return;
+    const bar = document.querySelector(`[data-bar="${m.id}"]`);
+    const secs = document.querySelector(`[data-secs="${m.id}"]`);
+    if (!bar || !secs) return;
+
+    const left = Math.max(0, m.remaining - (now - lastStateAt));
+    const pct = Math.max(0, Math.min(100,
+      left / (lastState.transit_seconds || 5) * 100));
+    bar.style.width = pct + '%';
+    secs.textContent = left.toFixed(1) + 's';
+  });
+}
+setInterval(tickCountdowns, 120);
+
+// --------------------------------------------------------------- sending
+
+function send() {
+  const t = $('text').value.trim();
+  if (!t) return;
+  if (t.length > MAX_CHARS) { $('text').value = t.slice(0, MAX_CHARS); return; }
+  // No minimum. Short messages are legitimate traffic; see
+  // message_layer.MIN_MESSAGE_CHARS for why an earlier lower bound of eight was
+  // removed. The only real requirement is a maximum.
+  if (t.length < MIN_CHARS) {
+    showToast('Message cannot be empty.', true);
+    return;
+  }
+  socketSend({ type: 'send', text: t, shots: SHOTS });
+  $('text').value = '';
+  // Keep the keyboard up so a rapid back-and-forth demo stays fluid.
+  $('text').focus();
+}
+
+$('sendBtn').onclick = send;
+$('text').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+
+$('roomCode').onclick = async () => {
+  try { await navigator.clipboard.writeText(location.origin + '/room?c=' + $('roomCode').textContent); } catch (e) {}
+  const el = $('roomCode');
+  const old = el.textContent;
+  el.textContent = 'copied';
+  setTimeout(() => el.textContent = old, 900);
+};
+
+// ------------------------------------------------- attacker console link
+
+// The console lives at its own address so it can run on a second device. The
+// room page is pure chat now -- an attacker sitting in the room with an inject
+// button visible would give the demonstration away before it started.
+$('consoleLink').href = '/attack';
+
+// ------------------------------------------------------------------ start
+
+(function init() {
+  const p = new URLSearchParams(location.search);
+  const code = (p.get('c') || '').toUpperCase();
+  if (code) $('jRoom').value = code;
+  $('jName').value = store(code || 'new');
+
+  connect();
+})();
+</script>
+</body>
+</html>

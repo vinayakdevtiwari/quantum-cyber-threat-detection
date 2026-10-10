@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Editors / operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test and build artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Runtime data
+# Demo session database written by server.py. Regenerated on every run,
+# so it should never be committed.
+*.db
+*.sqlite3
+
+# Debug and log files
+*.log
+debug_*.txt
+
+# 123 MB project archive; may embed .env or the SQLite database. Keep it
+# out of version control -- regenerate with 7-Zip when sharing.
+kcc.7z
+*.7z

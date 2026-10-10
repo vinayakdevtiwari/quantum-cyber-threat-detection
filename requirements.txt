@@ -1,0 +1,19 @@
+# Pinned to the versions this was built and measured against.
+# Direct dependencies only; transitive deps resolve from these.
+
+# Quantum simulation
+qiskit==2.5.2
+qiskit-aer==0.17.2
+
+# Numerics
+numpy==2.5.3
+scipy==1.18.1
+matplotlib==3.11.2
+
+# Dashboard + backend
+streamlit==1.65.0
+Flask==3.1.3
+
+# Config, testing
+python-dotenv==1.2.4
+pytest==9.1.1

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Victim — QDS</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="banner">
+    <div class="title">VICTIM — SEND &amp; VERIFY</div>
+    <div class="sub">Alice signs a message and watches what arrives.</div>
+  </div>
+
+  <div class="card">
+    <label>Message to sign (max {{ max_chars }} characters)</label>
+    <input id="msg" maxlength="{{ max_chars }}" value="TRANSFER $5000">
+    <div class="hint">ASCII only. Longer messages need more qubits.</div>
+    <button id="send">SIGN &amp; TRANSMIT</button>
+    <div id="err" class="err"></div>
+  </div>
+
+  <div id="sessionBox" style="display:none">
+    <div class="card">
+      <label>Session code — give this to the attacker</label>
+      <div class="chip" id="code">------</div>
+      <div class="hint" id="meta"></div>
+    </div>
+
+    <div class="card">
+      <div class="msg">
+        <div class="msg-label">Signed (original)</div>
+        <div class="msg-value good" id="signed">—</div>
+      </div>
+      <div class="msg">
+        <div class="msg-label">Received (as decoded)</div>
+        <div class="msg-value" id="received">—</div>
+      </div>
+      <div class="row" style="margin-top:0.7rem">
+        <div><span id="verdict" class="verdict v-ok">AWAITING ATTACK</span></div>
+        <div><button id="refresh" class="ghost" style="margin:0">REFRESH</button></div>
+      </div>
+      <div id="attackDesc" class="note"></div>
+
+      <!-- Authenticity: distinct from the per-bit integrity check above.
+           For replay these disagree on purpose: the witness PASSES because
+           the signature is genuine, and context binding is what objects. -->
+      <div id="authBox" style="display:none; margin-top:0.8rem;">
+        <label>Signature authenticity</label>
+        <div id="authRows"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <label>Per-bit verification</label>
+      <div id="bits" class="note">No result yet.</div>
+    </div>
+  </div>
+
+  <p class="note"><a href="/">Back to role select</a></p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let CODE = null;
+let POLL = null;
+
+async function createSession() {
+  $('err').textContent = '';
+  const res = await fetch('/api/session', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({message: $('msg').value, shots: 256})
+  });
+  const data = await res.json();
+  if (!data.ok) { $('err').textContent = data.error; return; }
+
+  CODE = data.code;
+  $('code').textContent = CODE;
+  $('signed').textContent = data.message;
+  $('meta').textContent = `${data.total_bits} bits · ${data.qubits} qubits`;
+  $('sessionBox').style.display = 'block';
+  poll();
+}
+
+async function poll() {
+  if (!CODE) return;
+  try {
+    const res = await fetch('/api/session/' + CODE);
+    const data = await res.json();
+    if (!data.ok) return;
+    const s = data.session;
+
+    if (s.received_text) {
+      $('received').textContent = s.received_text;
+      $('verdict').textContent = s.verdict;
+      $('verdict').className = 'verdict ' +
+        (s.verdict === 'VERIFIED' ? 'v-ok' :
+         s.verdict === 'SUSPECT' ? 'v-suspect' : 'v-bad');
+      $('attackDesc').textContent = s.attack_description || '';
+      $('received').className = 'msg-value ' + (s.corrupted ? 'bad' : 'good');
+      renderBits(s);
+      renderAuth(s);
+    }
+  } catch (e) { /* transient network error; next poll retries */ }
+}
+
+function renderBits(s) {
+  if (!s.received_bits) { $('bits').textContent = 'No bit data.'; return; }
+  const orig = s.original_bits;
+  const bad = [];
+  for (let i = 0; i < Math.min(orig.length, s.received_bits.length); i++) {
+    if (orig[i] !== s.received_bits[i]) {
+      bad.push(`<tr class="bad"><td>${i}</td><td>${orig[i]}</td><td>${s.received_bits[i]}</td><td>CORRUPT</td></tr>`);
+    }
+  }
+  if (!bad.length) {
+    $('bits').innerHTML = '<span style="color:var(--green)">Every bit matches the signed original.</span>';
+    return;
+  }
+  $('bits').innerHTML =
+    `<b>${bad.length} corrupted bit(s)</b><table><tr><th>BIT</th><th>EXPECTED</th><th>RECEIVED</th><th>STATUS</th></tr>` +
+    bad.slice(0, 80).join('') + `</table>` +
+    (bad.length > 80 ? `<div class="note">…and ${bad.length - 80} more.</div>` : '');
+}
+
+function renderAuth(s) {
+  const w = s.witness;
+  if (!w || !w.verdict) { $('authBox').style.display = 'none'; return; }
+  $('authBox').style.display = 'block';
+  const rows = [
+    ['Quantum witness', w.witness_passed === true ? 'PASSED' : (w.witness_passed === false ? 'rejected' : 'n/a'),
+     w.witness_passed === true ? 'var(--green)' : 'var(--red)'],
+  ];
+  if (w.context_verdict) {
+    rows.push(['Context binding', w.context_verdict,
+      w.context_verdict === 'CONTEXT VALID' ? 'var(--green)' : 'var(--red)']);
+  }
+  if (w.replayed_from) rows.push(['Replayed from', w.replayed_from, 'var(--amber)']);
+
+  let html = '<table style="width:100%;font-size:0.85rem;">';
+  for (const [k, v, c] of rows) {
+    html += `<tr><td style="padding:4px 6px;color:var(--muted);width:45%;">${k}</td>`
+          + `<td style="padding:4px 6px;color:${c};font-weight:700;">${v}</td></tr>`;
+  }
+  html += '</table>';
+  if (w.note) {
+    html += `<div class="note" style="color:var(--amber);margin-top:0.4rem;">${w.note}</div>`;
+  }
+  $('authRows').innerHTML = html;
+}
+
+$('send').onclick = createSession;
+$('refresh').onclick = poll;
+</script>
+</body>
+</html>

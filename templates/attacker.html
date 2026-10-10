@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attacker — QDS</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="banner">
+    <div class="title">ATTACKER — MANIPULATE BITS</div>
+    <div class="sub">Eve intercepts the channel and injects an attack.</div>
+  </div>
+
+  <div class="card">
+    <label>Victim's session code</label>
+    <input id="codeIn" placeholder="QCTD-0000" style="text-transform:uppercase">
+    <button id="join">JOIN SESSION</button>
+    <div id="err" class="err"></div>
+  </div>
+
+  <div id="attackBox" style="display:none">
+    <div class="card">
+      <label>Target message</label>
+      <div class="msg-value" id="target">—</div>
+      <div class="hint" id="tmeta"></div>
+    </div>
+
+    <div class="card">
+      <label>Attack type</label>
+      <select id="attack">
+        {% for key, label in attacks.items() %}
+        <option value="{{ key }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+
+      <div id="forgeryBox" style="margin-top:0.8rem; display:none">
+        <label>Bit indices to flip</label>
+        <input id="bits" value="40,41,42,43">
+        <div class="hint">Surgical corruption — each flip is traceable to a character.</div>
+      </div>
+
+      <!-- Text injection. Only shown for the SUBSTITUTION attacks, because
+           those replace the message content. For corruption attacks the text
+           has no meaning: Eve is flipping bits, not choosing wording, and
+           offering a text box there would blur that distinction. -->
+      <div id="textBox" style="margin-top:0.8rem; display:none">
+        <label>Replacement message (your text replaces the original)</label>
+        <input id="replaceText" maxlength="24" placeholder="PAYROLL APPROVED">
+        <div class="hint" id="textHint"></div>
+        <div id="bitPreview"></div>
+      </div>
+
+      <div id="replayBox" style="margin-top:0.8rem; display:none">
+        <label>Message to replay (from an earlier session)</label>
+        <select id="replayPick"></select>
+        <button id="loadPrior" class="ghost" style="margin-top:0.5rem;">REFRESH PRIOR SESSIONS</button>
+        <div class="hint">Replay re-presents a GENUINE signature from an earlier
+        session. The quantum witness ACCEPTS it — it is caught only because its
+        context binding names a different session.</div>
+      </div>
+
+      <div id="channelBox" style="margin-top:0.8rem; display:none">
+        <div class="hint">Randomised multi-bit corruption — the "garbage" case.</div>
+      </div>
+
+      <label style="margin-top:0.9rem; display:flex; align-items:center; gap:0.5rem;">
+        <input type="checkbox" id="noiseFree" style="width:auto;">
+        <span>Noise-free channel (land the attack exactly where aimed)</span>
+      </label>
+      <div class="hint">Leave checked for realistic hardware noise. Uncheck to
+      remove the extra bit flips that hardware adds on top of the attack.</div>
+
+      <button id="go">INJECT ATTACK</button>
+    </div>
+
+    <div class="card">
+      <label>Result on the victim's channel</label>
+      <div class="msg">
+        <div class="msg-label">Corrupted text</div>
+        <div class="msg-value bad" id="out">—</div>
+      </div>
+      <span id="verdict" class="verdict v-ok">NO ATTACK YET</span>
+      <div id="desc" class="note"></div>
+      <div class="note">Switch to the victim's phone and refresh to see this reflected there.</div>
+    </div>
+  </div>
+
+  <p class="note"><a href="/">Back to role select</a></p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let CODE = null;
+
+async function join() {
+  $('err').textContent = '';
+  const code = $('codeIn').value.trim().toUpperCase();
+  const res = await fetch('/api/session/' + code);
+  const data = await res.json();
+  if (!data.ok) { $('err').textContent = data.error || 'Could not join.'; return; }
+
+  CODE = code;
+  const s = data.session;
+  $('target').textContent = s.message;
+  $('tmeta').textContent = `${s.original_bits.length} bits in transit`;
+  $('attackBox').style.display = 'block';
+  syncBoxes();
+}
+
+// Attacks that REPLACE message content, where attacker-supplied text is the
+// payload. Corruption attacks (forgery flip, impersonation, channel
+// manipulation) operate on bits, so a text box would be meaningless there.
+const SUBSTITUTION_ATTACKS = ['forgery_substitute', 'replay'];
+
+function syncBoxes() {
+  const a = $('attack').value;
+  $('forgeryBox').style.display = a === 'forgery' ? 'block' : 'none';
+  $('replayBox').style.display  = a === 'replay'  ? 'block' : 'none';
+  $('channelBox').style.display = a === 'channel_manipulation' ? 'block' : 'none';
+
+  const isSub = SUBSTITUTION_ATTACKS.includes(a);
+  $('textBox').style.display = isSub ? 'block' : 'none';
+  $('textHint').textContent = a === 'replay'
+    ? 'Your text is the message Eve replays as an older, valid-looking message.'
+    : 'Your text becomes the message the victim receives. A keyless forger must ' +
+      'produce the correct witness pattern — that is what the signature layer checks.';
+
+  if (a === 'replay') loadPrior();
+}
+
+// Live preview of which bits differ from the original, so the attacker can
+// see WHY this substitution will be detectable rather than guessing.
+async function previewDiff() {
+  const text = $('replaceText').value.trim();
+  const box = $('bitPreview');
+  if (!text) { box.innerHTML = ''; return; }
+  if (text.length > 24) {
+    box.innerHTML = '<div class="err">Too long — max 24 characters.</div>';
+    return;
+  }
+  try {
+    const res = await fetch('/api/bit_diff', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: CODE, text: text})
+    });
+    const d = await res.json();
+    if (!d.ok) { box.innerHTML = ''; return; }
+    const total = d.total_bits || 1;
+    const pct = Math.round((d.differing_bits / total) * 100);
+    box.innerHTML =
+      `<div class="hint" style="margin-top:0.4rem;">` +
+      `<b>${d.differing_bits}</b> of ${total} bits will differ (${pct}%). ` +
+      `Verdict: <b style="color:${d.differing_bits ? 'var(--red)' : 'var(--green)'}">` +
+      `${d.would_be_caught}</b></div>`;
+  } catch (e) {
+    box.innerHTML = '';
+  }
+}
+
+// Populate the replay picker with genuinely-signed earlier sessions, so a
+// replay demo uses a real prior message rather than invented text.
+async function loadPrior() {
+  const sel = $('replayPick');
+  if (!sel) return;
+  try {
+    const res = await fetch('/api/prior_sessions');
+    const data = await res.json();
+    if (data.ok && data.sessions.length) {
+      sel.innerHTML = '';
+      data.sessions.forEach(s => {
+        const o = document.createElement('option');
+        // Send the SESSION CODE, not the text. The backend loads that
+        // session's genuine signed bits and stored context so the replay is a
+        // real prior signature rather than a plain-text substitution.
+        o.value = s.code;
+        o.dataset.message = s.message;
+        o.textContent = `${s.code}  |  ${s.message}`;
+        sel.appendChild(o);
+      });
+      sel.style.display = 'block';
+    } else {
+      sel.innerHTML = '<option value="">no prior sessions yet</option>';
+    }
+  } catch (e) {
+    sel.innerHTML = '<option value="">could not load prior sessions</option>';
+  }
+}
+
+async function inject() {
+  $('err').textContent = '';
+  const payload = {code: CODE, attack: $('attack').value};
+
+  if (payload.attack === 'forgery') {
+    payload.target_bits = $('bits').value;
+  }
+  // Substitution attacks carry the attacker's own wording. The typed text wins;
+  // for replay the picker provides the default if the box is left empty.
+  if (SUBSTITUTION_ATTACKS.includes(payload.attack)) {
+    const typed = $('replaceText').value.trim();
+    if (payload.attack === 'replay') {
+      // Replay needs the prior SESSION, so its real signed bits can be
+      // replayed. Typed text is only a fallback when no session is picked.
+      const sel = $('replayPick');
+      const picked = sel && sel.value ? sel.value : '';
+      if (picked) {
+        payload.replay_code = picked;
+      } else if (typed) {
+        payload.substitute = typed;
+      } else {
+        $('err').textContent = 'Pick a prior session to replay, or type a replacement message.';
+        $('go').disabled = false;
+        $('go').textContent = 'INJECT ATTACK';
+        return;
+      }
+    } else {
+      // Forgery-by-substitution is Eve's own wording; the typed text is the
+      // payload, and picking a prior session only pre-fills it.
+      if (!typed) {
+        $('err').textContent = 'Enter the replacement message to inject.';
+        $('go').disabled = false;
+        $('go').textContent = 'INJECT ATTACK';
+        return;
+      }
+      payload.substitute = typed;
+    }
+  }
+
+  // Hardware noise adds extra flipped bits on top of the attack. That is
+  // physically honest but means a 4-bit forgery can arrive as 6 corrupted
+  // bits, which muddies a targeted demo. Unchecking lands the attack exactly
+  // where it was aimed.
+  const noiseToggle = $('noiseFree');
+  if (noiseToggle) payload.noise_free = !noiseToggle.checked;
+
+  $('go').disabled = true;
+  $('go').textContent = 'RUNNING QUANTUM SIM…';
+  try {
+    const res = await fetch('/api/attack', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.ok) { $('err').textContent = data.error; return; }
+
+    $('out').textContent = data.received_text;
+    $('desc').textContent = data.attack_description;
+    $('verdict').textContent = data.verdict;
+    $('verdict').className = 'verdict ' +
+      (data.verdict === 'VERIFIED' ? 'v-ok' :
+       data.verdict === 'SUSPECT' ? 'v-suspect' : 'v-bad');
+  } catch (e) {
+    $('err').textContent = 'Network error — is the server still running?';
+  } finally {
+    $('go').disabled = false;
+    $('go').textContent = 'INJECT ATTACK';
+  }
+}
+
+$('join').onclick = join;
+$('go').onclick = inject;
+$('attack').onchange = syncBoxes;
+$('loadPrior').onclick = loadPrior;
+$('replaceText').oninput = previewDiff;
+</script>
+</body>
+</html>

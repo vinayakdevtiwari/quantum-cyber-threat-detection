@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QDS Phone Demo</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="banner">
+    <div class="title">QDS LIVE — BIT MANIPULATION DEMO</div>
+    <div class="sub">Two devices, one quantum backend. Pick a role.</div>
+  </div>
+
+  <div class="card">
+    <h1>Victim — send &amp; verify</h1>
+    <p class="note">Type a message, sign it, and share the session code with the
+    attacker. You will see what arrives and which bits were corrupted.</p>
+    <a href="/victim"><button class="ghost">OPEN VICTIM VIEW</button></a>
+  </div>
+
+  <div class="card">
+    <h1>Attacker — manipulate bits</h1>
+    <p class="note">Enter the victim's session code, choose an attack, and inject
+    it into the channel mid-transit.</p>
+    <a href="/attacker"><button class="ghost">OPEN ATTACKER VIEW</button></a>
+  </div>
+
+  <div class="card">
+    <h1>How it works</h1>
+    <p class="note">Your laptop runs the quantum simulation (Qiskit). The phones
+    are remote controls that send instructions and render results — quantum
+    processing cannot run on a phone.</p>
+    <p class="note">Both devices must be on the <b>same WiFi</b>, and you open the
+    laptop's LAN address (for example <span class="chip">http://192.168.1.42:5000</span>)
+    rather than <span class="chip">localhost</span>.</p>
+  </div>
+</div>
+</body>
+</html>

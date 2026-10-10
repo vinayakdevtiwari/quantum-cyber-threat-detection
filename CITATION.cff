@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "Please cite this project as software if you use it."
+title: "Quantum Cyber Threat Detection"
+type: software
+authors:
+  - family-names: Tiwari
+    given-names: Vinayak Dev
+  - family-names: Tiwari
+    given-names: Shivansh
+  - family-names: Singh
+    given-names: Ballabh Utkarsh
+repository-code: "https://github.com/vinayakdevtiwari/quantum-cyber-threat-detection"
+abstract: >-
+  An educational prototype that uses Qiskit Aer to simulate a simplified
+  teleportation-style Quantum Digital Signature session and demonstrate
+  statistical deviation scoring, an error-rate check, and rule-based risk posture.
+keywords:
+  - quantum circuit simulation
+  - Qiskit
+  - cyber threat detection
+  - statistical anomaly scoring
