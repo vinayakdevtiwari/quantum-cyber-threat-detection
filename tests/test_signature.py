@@ -254,6 +254,77 @@ def test_witness_does_not_reveal_plaintext():
     assert all(b in (0, 1) for b in conv["wire_bits"])
 
 
+def test_short_candidate_is_refused_outright():
+    """
+    Regression: the gate was bypassable by sending a SHORT candidate.
+
+    verify_witness zips the candidate against the witness, which stops at
+    whichever is shorter, so a short candidate was scored only on its own few
+    qubits. Measured on a 48-qubit witness, a 1-bit candidate was GRANTED
+    whenever that bit happened to agree, and an EMPTY candidate was granted
+    every time -- no key required at all.
+
+    Length is now checked before any comparison.
+    """
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0] * 6
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    wire = conv["wire_bits"]
+
+    assert gate_access(conv["witness"], [])["granted"] is False
+    assert gate_access(conv["witness"], wire[:1])["granted"] is False
+    assert gate_access(conv["witness"], wire[:5])["granted"] is False
+    assert gate_access(conv["witness"], wire[:len(wire) - 1])["granted"] is False
+
+
+def test_long_candidate_is_refused_outright():
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0] * 6
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    padded = conv["wire_bits"] + [0, 0, 0]
+    assert gate_access(conv["witness"], padded)["granted"] is False
+
+
+def test_wrong_length_explains_itself():
+    """The refusal has to say WHY, or the attacker cannot tell a fixable
+    mistake from a rejected forgery."""
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0] * 6
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    r = gate_access(conv["witness"], [1, 0, 1])
+    assert r["granted"] is False
+    assert "witness is" in r["explanation"]
+    assert str(len(conv["witness"])) in r["explanation"]
+
+
+def test_empty_witness_never_grants():
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1]
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    assert gate_access([], conv["wire_bits"])["granted"] is False
+
+
+def test_random_length_guesses_never_win():
+    """
+    An attacker who does not know the message length picks a length at random.
+    Every one of those must fail: the only length that can pass is the real one,
+    and matching it still requires the key.
+    """
+    rng = np.random.default_rng(11)
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0] * 6
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    real = len(conv["witness"])
+
+    for _ in range(40):
+        guess_len = int(rng.integers(0, real + 12))
+        guess = list(rng.integers(0, 2, size=guess_len))
+        if guess_len == real:
+            # right length, wrong content -- still a guess
+            pass
+        assert gate_access(conv["witness"], guess)["granted"] is False, guess_len
+
+
 # --- end to end -----------------------------------------------------------
 
 def test_honest_flow_verifies():

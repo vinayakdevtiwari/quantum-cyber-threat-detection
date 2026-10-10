@@ -422,8 +422,50 @@ def gate_access(conversation_witness, candidate_bits,
     verify_witness's own verdict is still reported alongside the decision, so
     the UI can distinguish "you guessed" (FORGERY_PROVEN) from "your key is
     right but the channel was noisy" (INCONCLUSIVE or VERIFIED).
+
+    LENGTH IS CHECKED FIRST, AND IT IS NOT AN AFTERTHOUGHT
+    -----------------------------------------------------
+    verify_witness zips the candidate against the witness, which stops at
+    whichever is shorter. A candidate shorter than the witness was therefore
+    scored only on its own few qubits, and a match rate over those few qubits
+    looks perfect. Measured on a 48-qubit witness: a 1-bit candidate was
+    GRANTED whenever that single bit happened to agree, and an EMPTY candidate
+    was granted every time -- a total bypass requiring no key at all.
+
+    So a candidate of the wrong length is refused before any comparison, and
+    the length of the witness rather than the length of the candidate is what
+    the rate is measured over. Shortening your guess is not a way to make it
+    easier to pass.
     """
-    result = verify_witness(conversation_witness, candidate_bits, floor=floor)
+    witness_len = len(conversation_witness or [])
+    candidate = list(candidate_bits or [])
+
+    if witness_len == 0:
+        return {
+            "granted": False, "verdict": ACCESS_DENIED,
+            "witness_verdict": None, "match_rate": 0.0, "threshold": threshold,
+            "rows": [], "total": 0, "mismatches": 0, "proven_forgeries": 0,
+            "forgery_probability": 0.0,
+            "explanation": "There is no witness to verify against.",
+        }
+
+    if len(candidate) != witness_len:
+        return {
+            "granted": False, "verdict": ACCESS_DENIED,
+            "witness_verdict": None, "match_rate": 0.0, "threshold": threshold,
+            "rows": [], "total": witness_len,
+            "mismatches": witness_len, "proven_forgeries": 0,
+            "forgery_probability": 0.0,
+            "explanation": (
+                f"Candidate is {len(candidate)} bit(s) but the witness is "
+                f"{witness_len}. A candidate of the wrong length is refused "
+                f"without being compared -- otherwise a short guess could be "
+                f"scored only on its own few qubits and look like a perfect "
+                f"match. Access denied."
+            ),
+        }
+
+    result = verify_witness(conversation_witness, candidate, floor=floor)
     total = result["total"]
     match_rate = ((total - result["mismatches"]) / total) if total else 0.0
     granted = bool(total) and match_rate >= threshold
