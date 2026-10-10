@@ -219,6 +219,309 @@ def test_registry_sweeps_idle_rooms():
     assert reg.get("OLD1") is None
 
 
+# --- conversations: groups and private DMs ---------------------------------
+
+def test_group_conversation_is_readable_by_everyone():
+    room = _room()
+    alice = room.join("Alice")
+    eve = room.join("Eve", is_attacker=True)
+    group = room.group_conversation()
+    assert group.kind == rooms.CONV_GROUP
+    assert group.is_member(alice.id)
+    # An attacker is in the room, so the group is open to them by design.
+    assert group.is_member(eve.id)
+
+
+def test_dm_id_is_order_independent():
+    """Whoever opens the chat first, it is the same conversation."""
+    a, b = "p1", "p2"
+    assert rooms.dm_conversation_id(a, b) == rooms.dm_conversation_id(b, a)
+
+
+def test_opening_a_dm_is_idempotent_from_either_side():
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    first, err1 = room.open_dm(alice, bob.id)
+    second, err2 = room.open_dm(bob, alice.id)
+    assert err1 is None and err2 is None
+    assert first is second
+    # One DM. The group is created lazily on first use, so it is not counted
+    # here -- asking for it is what brings it into existence.
+    assert len(room.conversations) == 1
+
+
+def test_dm_refuses_itself():
+    """A chat with yourself is not a private chat."""
+    room = _room()
+    alice = room.join("Alice")
+    assert room.open_dm(alice, alice.id)[1] is not None
+
+
+def test_dm_with_someone_who_has_not_joined_yet_is_allowed():
+    """
+    A DM to an absent participant is still creatable, or a conversation could
+    never exist before the other person arrived. The conversation simply has no
+    readable second party until they join.
+    """
+    room = _room()
+    alice = room.join("Alice")
+    ghost = type("X", (), {"id": "not-here", "name": "Ghost"})()
+    conv, err = room.open_dm(alice, ghost.id)
+    assert err is None
+    assert conv is not None
+    # An absent participant has no display name, so the title must not leak
+    # the raw participant id into the chat list.
+    assert conv.title == "invited"
+
+    # Once they join under that same participant id, the conversation picks up
+    # their real name. Note the id has to match: room.join() mints a fresh id,
+    # so a different id is a different person and correctly a different chat.
+    late = room.join("Ghost", client_id=ghost.id)
+    same, _ = room.open_dm(alice, late.id)
+    assert same is conv
+    assert conv.title == "Ghost"
+
+
+def test_dm_members_can_read_it():
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    conv, _ = room.open_dm(alice, bob.id)
+    assert room.can_read(conv, alice.id)
+    assert room.can_read(conv, bob.id)
+
+
+# --- the privacy boundary ---------------------------------------------------
+#
+# These are the tests that matter most. Everything else in this file could pass
+# while DMs leak, because a leak is invisible in the UI -- the page renders
+# fine and the content is simply sitting in the socket payload.
+
+def test_eve_cannot_read_a_dm_plaintext():
+    """
+    An attacker in the room must not receive DM content in their snapshot.
+
+    This is the property the whole private-chat feature rests on.
+    """
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    eve = room.join("Eve", is_attacker=True)
+
+    conv, _ = room.open_dm(alice, bob.id)
+    msg = room.add_message(alice, "PAYROLL SECRET 4471",
+                           conversation=conv)
+    msg["status"] = STATUS_DELIVERED
+    msg["result"] = {
+        "ok": True,
+        "received_text": "PAYROLL SECRET 4471",
+        "verdict": "VERIFIED",
+    }
+
+    eve_view = room.state(viewer_id=eve.id)
+
+    blob = repr(eve_view)
+    assert "PAYROLL SECRET 4471" not in blob, (
+        "DM plaintext leaked into the attacker's state snapshot")
+
+    # and the message is present but marked unreadable, so the console can
+    # show a locked row rather than pretending the message never existed
+    entry = next(m for m in eve_view["messages"] if m["id"] == msg["id"])
+    assert entry["readable"] is False
+    assert entry["text"] is None
+
+
+def test_eve_cannot_read_received_text_from_the_result():
+    """
+    Regression guard for the subtler half of the leak.
+
+    Stripping the message body is not sufficient: `result` carries
+    received_text, so a snapshot that blanks `text` but still ships `result`
+    hands over the entire conversation with the wrong field removed.
+    """
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    eve = room.join("Eve", is_attacker=True)
+
+    conv, _ = room.open_dm(alice, bob.id)
+    msg = room.add_message(alice, "PIN 9911", conversation=conv)
+    msg["status"] = STATUS_DELIVERED
+    msg["result"] = {"ok": True, "received_text": "PIN 9911", "verdict": "VERIFIED"}
+
+    eve_view = room.state(viewer_id=eve.id)
+    entry = next(m for m in eve_view["messages"] if m["id"] == msg["id"])
+    assert entry["result"] is None
+    assert "PIN 9911" not in repr(eve_view)
+
+
+def test_members_still_see_their_own_dm():
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    conv, _ = room.open_dm(alice, bob.id)
+    msg = room.add_message(alice, "PAYROLL SECRET 4471", conversation=conv)
+    msg["status"] = STATUS_DELIVERED
+    msg["result"] = {"ok": True, "received_text": "PAYROLL SECRET 4471",
+                     "verdict": "VERIFIED"}
+
+    for viewer in (alice, bob):
+        view = room.state(viewer_id=viewer.id)
+        entry = next(m for m in view["messages"] if m["id"] == msg["id"])
+        assert entry["readable"] is True
+        assert entry["text"] == "PAYROLL SECRET 4471"
+
+
+def test_group_messages_are_still_visible_to_everyone():
+    """The privacy rule must not break the existing group demo."""
+    room = _room()
+    alice = room.join("Alice")
+    eve = room.join("Eve", is_attacker=True)
+    msg = room.add_message(alice, "ROOM ANNOUNCEMENT")
+    msg["status"] = STATUS_DELIVERED
+    msg["result"] = {"ok": True, "received_text": "ROOM ANNOUNCEMENT",
+                     "verdict": "VERIFIED"}
+
+    view = room.state(viewer_id=eve.id)
+    entry = next(m for m in view["messages"] if m["id"] == msg["id"])
+    assert entry["readable"] is True
+    assert entry["text"] == "ROOM ANNOUNCEMENT"
+
+
+def test_master_seed_is_never_serialised():
+    """
+    The room's master secret must not appear in any snapshot. Only a short
+    fingerprint is exposed so clients can tell rooms apart.
+    """
+    room = _room()
+    alice = room.join("Alice")
+    view = room.state(viewer_id=alice.id)
+    assert room.master_seed not in repr(view)
+    assert view["master_seed_fingerprint"] == room.master_seed[:8]
+    assert len(view["master_seed_fingerprint"]) < 16
+
+
+# --- the quantum gate, at the room layer -----------------------------------
+
+def test_gate_refuses_an_attacker_who_is_guessing():
+    """
+    Eve joins the room and tries to read a DM she is not part of. She has no
+    key, so the gate refuses -- and the refusal must not depend on whether she
+    admits to being an attacker.
+    """
+    from signature import derive_conversation_key
+
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    eve = room.join("Eve", is_attacker=True)
+
+    conv, _ = room.open_dm(alice, bob.id)
+    msg = room.add_message(alice, "PAYROLL SECRET 4471", conversation=conv)
+    msg["status"] = STATUS_DELIVERED
+    msg["result"] = {"ok": True, "received_text": "PAYROLL SECRET 4471",
+                     "verdict": "VERIFIED"}
+
+    # Eve guesses: the plaintext, which is exactly what she would try first.
+    guess = [int(b) for b in msg["original_bits"]]
+    result, err = room.request_dm_access(eve, conv.id, guess, shots=64)
+
+    assert err is None
+    assert result["granted"] is False
+    assert not room.can_read(conv, eve.id)
+
+
+def test_gate_grants_a_holder_of_the_key():
+    """
+    Eve harvests the key from the room's seed and re-derives the wire bits.
+    That is what possession of the key looks like, and it opens the chat.
+    """
+    from signature import derive_conversation_key, encrypt
+
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    eve = room.join("Eve", is_attacker=True)
+
+    conv, _ = room.open_dm(alice, bob.id)
+    msg = room.add_message(alice, "PAYROLL SECRET 4471", conversation=conv)
+    msg["status"] = STATUS_DELIVERED
+
+    key = derive_conversation_key(room.master_seed, conv.id,
+                                  len(msg["original_bits"]))
+    wire = encrypt(msg["original_bits"], key)
+
+    result, err = room.request_dm_access(eve, conv.id, wire, shots=64)
+    assert err is None
+    assert result["granted"] is True
+    assert room.can_read(conv, eve.id)
+
+
+def test_grant_makes_the_dm_readable_in_state():
+    """A granted attacker then sees the conversation, as the demo intends."""
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    eve = room.join("Eve", is_attacker=True)
+
+    conv, _ = room.open_dm(alice, bob.id)
+    msg = room.add_message(alice, "PAYROLL SECRET 4471", conversation=conv)
+    msg["status"] = STATUS_DELIVERED
+    msg["result"] = {"ok": True, "received_text": "PAYROLL SECRET 4471",
+                     "verdict": "VERIFIED"}
+
+    room.grant_dm_access_for_test(conv.id, eve.id)
+    view = room.state(viewer_id=eve.id)
+    entry = next(m for m in view["messages"] if m["id"] == msg["id"])
+    assert entry["readable"] is True
+    assert entry["text"] == "PAYROLL SECRET 4471"
+
+
+def test_a_member_does_not_need_the_gate():
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    conv, _ = room.open_dm(alice, bob.id)
+    msg = room.add_message(alice, "hello bob", conversation=conv)
+    msg["status"] = STATUS_DELIVERED
+    result, err = room.request_dm_access(alice, conv.id, [], shots=64)
+    assert err is None
+    assert result["granted"] is True
+    assert result["already_member"] is True
+
+
+def test_gate_refuses_an_empty_conversation():
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    eve = room.join("Eve", is_attacker=True)
+    conv, _ = room.open_dm(alice, bob.id)
+    result, err = room.request_dm_access(eve, conv.id, [1, 0, 1], shots=64)
+    assert result is None
+    assert err is not None
+
+
+def test_conversation_list_marks_locked_dms():
+    """The console needs a 'locked' row to render, and it must not imply access."""
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    eve = room.join("Eve", is_attacker=True)
+    conv, _ = room.open_dm(alice, bob.id)
+    room.add_message(alice, "PAYROLL SECRET 4471", conversation=conv)
+
+    view = room.state(viewer_id=eve.id)
+    row = next(c for c in view["conversations"] if c["id"] == conv.id)
+    assert row["kind"] == rooms.CONV_DM
+    assert row["is_member"] is False
+    assert row["locked"] is True
+
+    member_view = room.state(viewer_id=alice.id)
+    member_row = next(c for c in member_view["conversations"] if c["id"] == conv.id)
+    assert member_row["locked"] is False
+
+
 # --- substitution semantics the room relies on -----------------------------
 
 def test_substitution_reaches_the_room_unchanged():

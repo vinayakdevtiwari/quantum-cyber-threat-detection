@@ -350,6 +350,31 @@ def verify_witness(witness, presented_bits, floor: float = WITNESS_FLOOR):
 ACCESS_GRANTED = "ACCESS GRANTED"
 ACCESS_DENIED = "ACCESS DENIED"
 
+# Fraction of qubits that must match before the gate opens.
+#
+# WHY NOT AN EXACT MATCH
+# ----------------------
+# An exact match is the obvious rule and it is wrong here. The witness is
+# measured on a NOISY channel, so even a holder of the genuine key loses the
+# occasional qubit to hardware noise: measured, a genuine 152-qubit candidate
+# was refused 1 qubit at 64 shots. An exact-match gate would lock legitimate
+# members out of their own conversations on a coin flip, which is a worse
+# failure than the one it is guarding against.
+#
+# WHY THIS NUMBER IS SAFE
+# -----------------------
+# The two populations are nowhere near each other. A holder of the key matches
+# essentially every qubit -- honest noise costs a fraction of a percent. An
+# attacker guessing matches about half, because they have no way to predict a
+# bit they do not hold. So the decision boundary can sit anywhere in the wide
+# gap between them; 0.90 is far above guessing and far below honest.
+#
+# Chosen to mirror the project's existing conventions rather than invented
+# here: NOISE_FLOOR in message_layer is 0.028 and WITNESS_FLOOR above is 0.90.
+# Note this is a match rate, not an error rate -- it must be read as "at least
+# 90% of qubits agree", not "at most 10% disagree in a confident sense".
+ACCESS_MATCH_THRESHOLD = 0.90
+
 
 def build_conversation_witness(master_seed, conversation_id, message_bits,
                                shots: int = 256, noise_model=DEFAULT_NOISE_MODEL):
@@ -372,50 +397,65 @@ def build_conversation_witness(master_seed, conversation_id, message_bits,
     return {"key": key, "wire_bits": wire, "witness": witness}
 
 
-def gate_access(conversation_witness, candidate_bits, floor: float = WITNESS_FLOOR):
+def gate_access(conversation_witness, candidate_bits,
+                floor: float = WITNESS_FLOOR,
+                threshold: float = ACCESS_MATCH_THRESHOLD):
     """
     Decide whether a candidate may read a private conversation.
 
     This is verify_witness() used as an access-control decision rather than a
     forgery detector. The caller presents the bits they believe are on the wire;
-    if those agree with the stored witness the caller holds a real key, and if
-    they disagree the caller was guessing.
+    if enough of those agree with the stored witness the caller holds a real
+    key, and if they disagree the caller was guessing.
 
-    Guessing does not get in. verify_witness() reports FORGERY_PROVEN once more
-    than 5% of qubits mismatch confidently, and a guess mismatches roughly half
-    of them, so a guess is rejected by a wide margin. That margin is the whole
-    reason this gate is worth building on quantum state rather than on a
-    password: the attacker gets unlimited attempts and the odds stay against
-    her, because producing a candidate that matches a witness requires the key.
+    Guessing does not get in. A guess matches roughly half the qubits, so it
+    lands far below `threshold`, while a holder of the key matches essentially
+    all of them. That gap is the whole reason this gate is worth building on
+    quantum state rather than on a password: the attacker gets unlimited
+    attempts and the odds stay against her, because producing a candidate that
+    matches a witness requires the key.
 
-    Only an exact VERIFIED grants access. INCONCLUSIVE denies -- a partial match
-    is a near-miss from noise or a truncated attempt, and neither is a reason to
-    hand over a private conversation.
+    The threshold is a match rate, not an exact comparison, because the witness
+    is measured on a noisy channel and even a genuine key loses the occasional
+    qubit. See ACCESS_MATCH_THRESHOLD for why an exact match would be wrong.
+
+    verify_witness's own verdict is still reported alongside the decision, so
+    the UI can distinguish "you guessed" (FORGERY_PROVEN) from "your key is
+    right but the channel was noisy" (INCONCLUSIVE or VERIFIED).
     """
     result = verify_witness(conversation_witness, candidate_bits, floor=floor)
-    granted = result["verdict"] == VERIFIED
+    total = result["total"]
+    match_rate = ((total - result["mismatches"]) / total) if total else 0.0
+    granted = bool(total) and match_rate >= threshold
+
+    if granted:
+        explanation = (
+            f"Candidate matched {result['total'] - result['mismatches']} of "
+            f"{total} qubits ({match_rate:.1%}). That requires holding the "
+            f"conversation key, so access is granted."
+        )
+    elif not total:
+        explanation = ("No qubits to verify against -- nothing was presented.")
+    else:
+        explanation = (
+            f"Candidate matched only {result['total'] - result['mismatches']} of "
+            f"{total} qubits ({match_rate:.1%}), below the {threshold:.0%} "
+            f"required. Producing a matching witness requires the key; "
+            f"guessing does not scale. Access denied."
+        )
 
     return {
         "granted": granted,
         "verdict": ACCESS_GRANTED if granted else ACCESS_DENIED,
         "witness_verdict": result["verdict"],
-        "match_rate": (
-            round((result["total"] - result["mismatches"]) / result["total"], 4)
-            if result["total"] else 0.0
-        ),
+        "match_rate": round(match_rate, 4),
+        "threshold": threshold,
         "rows": result["rows"],
-        "total": result["total"],
+        "total": total,
         "mismatches": result["mismatches"],
         "proven_forgeries": result["proven_forgeries"],
         "forgery_probability": result["forgery_probability"],
-        "explanation": (
-            "Candidate agrees with the stored quantum witness on every qubit. "
-            "That requires holding the conversation key, so access is granted."
-            if granted else
-            f"{result['proven_forgeries']} of {result['total']} qubits mismatched "
-            f"confidently ({result['verdict']}). Producing a matching witness "
-            f"requires the key; guessing does not scale. Access denied."
-        ),
+        "explanation": explanation,
     }
 
 

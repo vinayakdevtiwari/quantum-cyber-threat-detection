@@ -50,6 +50,11 @@ import threading
 import time
 import uuid
 
+from signature import (
+    new_master_seed, build_conversation_witness, gate_access,
+    ACCESS_GRANTED,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -128,6 +133,88 @@ class Participant:
         return d
 
 
+# ---------------------------------------------------------------------------
+# Conversations
+# ---------------------------------------------------------------------------
+
+CONV_GROUP = "group"
+CONV_DM = "dm"
+
+
+def dm_conversation_id(a, b):
+    """
+    Stable id for the private chat between two participants.
+
+    Order-independent, so "dm:alice|bob" and "dm:bob|alice" are the same
+    conversation no matter who opens it first. Sorting by participant id
+    rather than display name means a rename cannot fork a conversation into
+    two and orphan the history.
+    """
+    x, y = sorted([str(a), str(b)])
+    return f"dm:{x}|{y}"
+
+
+def group_conversation_id(room_code):
+    """One group conversation per room. Its id is the room code itself."""
+    return f"group:{room_code}"
+
+
+class Conversation:
+    """
+    One chat inside a room: either the shared group or a private DM.
+
+    A conversation is a view onto the room's message list, not a separate
+    store. Messages still live in Room.messages and are tagged with a
+    conversation id, so the existing transit scheduler, attack logging and
+    delivery path keep working unchanged -- a DM is delivered by exactly the
+    same code as a group message, differing only in who may read the result.
+
+    WHY THE GROUP IS JUST ANOTHER CONVERSATION
+    ------------------------------------------
+    Making the group a conversation too means one privacy rule covers both,
+    rather than a special case for DMs bolted onto group logic. It also means
+    the attacker console can target "a message" without caring which kind it
+    is, which is the whole premise of the demo.
+    """
+
+    def __init__(self, room, conv_id, kind, title, member_ids):
+        self.room = room
+        self.id = conv_id
+        self.kind = kind
+        self.title = title
+        self.member_ids = set(member_ids)
+        # Per-conversation quantum witness cache, keyed by message id. Built on
+        # first need and never transmitted.
+        self.witnesses = {}
+        self.created_at = time.time()
+
+    def __repr__(self):  # pragma: no cover - debugging aid
+        return f"<Conversation {self.id} {self.kind} members={len(self.member_ids)}>"
+
+    def is_member(self, participant_id):
+        """
+        May this participant read the plaintext?
+
+        The group is readable by everyone in the room. A DM is readable only by
+        its two members, or by someone who has been granted access by passing
+        the quantum gate.
+        """
+        if self.kind == CONV_GROUP:
+            return True
+        return participant_id in self.member_ids
+
+    def public(self, viewer_id=None):
+        """Per-viewer summary. Never carries message content -- see Room.state."""
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "title": self.title,
+            "members": sorted(self.member_ids),
+            "member_count": len(self.member_ids),
+            "is_member": self.is_member(viewer_id),
+        }
+
+
 class Room:
     """A room: participants, messages, and the worker that drives delivery."""
 
@@ -143,6 +230,18 @@ class Room:
         self.participants = {}
         self.messages = []
         self.order = []
+        self.conversations = {}
+
+        # The room's master secret. Every conversation key derives from this,
+        # so compromising it compromises every private chat in the room. It is
+        # generated in memory and NEVER serialised into a state snapshot or
+        # sent over the socket -- see Room.state and test_eve_cannot_read_dm.
+        self.master_seed = new_master_seed()
+
+        # Participants who have cleared the quantum gate for a DM, mapped
+        # conv_id -> set of participant ids. Populated only by a successful
+        # gate_access, never by a request.
+        self.dm_grants = {}
 
         # One lock for the whole room. Contention is trivial -- a handful of
         # phones -- and it keeps message state transitions atomic. The quantum
@@ -178,9 +277,149 @@ class Room:
             self.touched_at = time.time()
         return p
 
+    # -- conversations ------------------------------------------------------
+
+    def group_conversation(self):
+        """The room's shared conversation. Created lazily so old rooms work."""
+        cid = group_conversation_id(self.code)
+        with self.lock:
+            conv = self.conversations.get(cid)
+            if conv is None:
+                conv = Conversation(self, cid, CONV_GROUP, self.name,
+                                    self.participants.keys())
+                self.conversations[cid] = conv
+                self.touched_at = time.time()
+            return conv
+
+    def open_dm(self, requester, other_id):
+        """
+        Open (or fetch) the private chat between two participants.
+
+        Returns (conversation, error). The requester must be a participant of
+        this room; the other party need not be -- a DM to someone who has not
+        joined yet still has to be deliverable, otherwise the conversation
+        could not exist before they arrive.
+        """
+        with self.lock:
+            if requester is None or other_id is None:
+                return None, "Both participants are required for a private chat."
+            if requester.id not in self.participants:
+                return None, "You are not in this room."
+            if other_id == requester.id:
+                return None, "A private chat needs two different people."
+
+            other = self.participants.get(other_id)
+            # Someone who has not joined yet has no display name, so fall back
+            # to something readable rather than the raw participant id -- the
+            # id is an implementation detail and shows up in the chat list.
+            label = other.name if other else "invited"
+
+            cid = dm_conversation_id(requester.id, other_id)
+            conv = self.conversations.get(cid)
+            if conv is None:
+                conv = Conversation(self, cid, CONV_DM, label,
+                                    [requester.id, other_id])
+                self.conversations[cid] = conv
+            elif other:
+                # Refresh the title now that they have a real name. The id is
+                # derived from participant ids, so renaming cannot fork the
+                # conversation or orphan its history.
+                conv.title = other.name
+
+            self.touched_at = time.time()
+            return conv, None
+
+    def conversation(self, conv_id):
+        with self.lock:
+            conv = self.conversations.get(conv_id)
+            if conv is not None:
+                return conv
+            # Unknown ids fall back to the group rather than erroring, so a
+            # client that predates this field still renders something sane.
+            return self.group_conversation()
+
+    def can_read(self, conv, participant_id):
+        """Membership, or a quantum grant. This is the only read path."""
+        if conv is None:
+            return False
+        if conv.is_member(participant_id):
+            return True
+        with self.lock:
+            return participant_id in self.dm_grants.get(conv.id, set())
+
+    def request_dm_access(self, requester, conv_id, candidate_bits,
+                          shots=96):
+        """
+        Run the quantum gate for a participant against a private conversation.
+
+        `candidate_bits` is what the requester believes is on the wire. A
+        holder of the conversation's key produces the true wire bits and is
+        granted access; anyone guessing is refused.
+
+        The room's master seed is never accepted as input and never leaves the
+        server -- access is decided by the witness, which is the point.
+        """
+        with self.lock:
+            conv = self.conversations.get(conv_id)
+            if conv is None:
+                return None, "No such private conversation."
+            if requester is None or requester.id not in self.participants:
+                return None, "You are not in this room."
+            if conv.kind != CONV_DM:
+                return None, "That conversation is not private."
+            if conv.is_member(requester.id):
+                # A member does not need the gate; saying so plainly avoids a
+                # confusing denial for someone who is legitimately in the chat.
+                return {
+                    "granted": True,
+                    "verdict": ACCESS_GRANTED,
+                    "already_member": True,
+                    "match_rate": 1.0,
+                    "rows": [],
+                    "total": 0,
+                    "mismatches": 0,
+                    "explanation": "You are a participant in this conversation.",
+                }, None
+
+        # Build the witness for the most recent message in this conversation.
+        latest = None
+        for m in reversed(self.messages):
+            if m.get("conversation_id") == conv_id:
+                latest = m
+                break
+
+        if latest is None:
+            return None, "That conversation has no messages to verify against."
+
+        from signature import derive_conversation_key, encrypt
+        plain = [int(b) & 1 for b in latest["original_bits"]]
+        key = derive_conversation_key(self.master_seed, conv_id, len(plain))
+        built = build_conversation_witness(self.master_seed, conv_id, plain,
+                                           shots=shots)
+        result = gate_access(built["witness"], candidate_bits or [])
+
+        if result["granted"]:
+            with self.lock:
+                self.dm_grants.setdefault(conv_id, set()).add(requester.id)
+                self.touched_at = time.time()
+        return result, None
+
+    def grant_dm_access_for_test(self, conv_id, participant_id):
+        """
+        Record access without running the gate.
+
+        For tests and for staging a demo where the operator decides which
+        harvest Eve performs. Not reachable from the socket -- the wire path
+        only ever calls request_dm_access.
+        """
+        with self.lock:
+            self.dm_grants.setdefault(conv_id, set()).add(participant_id)
+            self.touched_at = time.time()
+
     # -- messages -----------------------------------------------------------
 
-    def add_message(self, sender, text, shots=96, noise_free=False):
+    def add_message(self, sender, text, shots=96, noise_free=False,
+                    conversation=None):
         from message_layer import text_to_bits
 
         text = (text or "").strip()
@@ -196,10 +435,17 @@ class Room:
         except ValueError as exc:
             raise ValueError(str(exc))
 
+        # Default to the group so every existing caller -- the REST fallback,
+        # the room socket, the tests -- keeps working unchanged. A DM is opted
+        # into explicitly by passing its conversation.
+        conv = conversation if conversation is not None else self.group_conversation()
+
         msg = {
             "id": uuid.uuid4().hex[:12],
             "sender": sender.name,
             "sender_id": sender.id,
+            "conversation_id": conv.id,
+            "conversation_kind": conv.kind,
             "text": text,
             "original_bits": bits,
             "shots": int(shots or 96),
@@ -310,19 +556,60 @@ class Room:
                 delivered = (m["status"] == STATUS_DELIVERED
                              and bool(m["result"]))
 
+                # ----------------------------------------------------------------
+                # THE PRIVACY BOUNDARY
+                # ----------------------------------------------------------------
+                # A viewer who may not read this conversation gets no plaintext
+                # AND no received text -- not a placeholder, not a truncated
+                # form, nothing that could leak content by shape or length.
+                #
+                # `result` carries received_text, so stripping the message is
+                # not enough on its own; the result has to be withheld too.
+                # Shipping the one and forgetting the other is the obvious way
+                # to get this wrong, and it would fail silently: the UI would
+                # look fine and the leak would only be visible in the payload.
+                readable = self.can_read(
+                    self.conversations.get(m.get("conversation_id")), viewer_id)
+
+                visible_text = (m["text"] if delivered else None) if readable else None
+                visible_result = m["result"] if readable else None
+                visible_attacks = shown_attacks if readable else []
+
                 msgs.append({
                     "id": m["id"],
                     "sender": m["sender"],
                     "sender_id": m["sender_id"],
+                    "conversation_id": m.get("conversation_id"),
+                    "conversation_kind": m.get("conversation_kind", CONV_GROUP),
                     # None while in flight. The client renders a placeholder.
-                    "text": m["text"] if delivered else None,
+                    "text": visible_text,
+                    # The UI shows this instead of the body when False, so a
+                    # non-member learns the message exists without reading it.
+                    "readable": readable,
                     "status": m["status"],
                     "created_at": m["created_at"],
                     "remaining": remaining,
-                    "attacks": shown_attacks,
+                    "attacks": visible_attacks,
                     "attack_count": len(m["attacks"]),
-                    "result": m["result"],
+                    "result": visible_result,
                     "mine": viewer_id is not None and m["sender_id"] == viewer_id,
+                })
+
+            # Conversation list, filtered to those this viewer can see at all.
+            # A non-member still sees the DM EXISTS -- that is what makes the
+            # attack console's "locked conversation" row meaningful -- but not
+            # its contents.
+            convs = []
+            for cid, conv in self.conversations.items():
+                granted = self.can_read(conv, viewer_id)
+                convs.append({
+                    "id": conv.id,
+                    "kind": conv.kind,
+                    "title": conv.title,
+                    "member_count": len(conv.member_ids),
+                    "is_member": conv.is_member(viewer_id),
+                    "granted": granted,
+                    "locked": not granted,
                 })
 
             return {
@@ -331,6 +618,10 @@ class Room:
                 "transit_seconds": self.transit_seconds,
                 "participants": parts,
                 "messages": msgs,
+                "conversations": convs,
+                # Never the seed itself. Present only so a client can tell a
+                # room apart from another with the same shape.
+                "master_seed_fingerprint": self.master_seed[:8],
                 "server_time": time.time(),
                 "revealed": reveal_all,
             }
