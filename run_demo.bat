@@ -28,7 +28,7 @@ echo ===================================================================
 echo.
 
 REM --- Step 1: preflight ------------------------------------------------
-echo [1/3] Running preflight checks...
+echo [1/5] Running preflight checks...
 echo.
 "%PY%" preflight.py
 if errorlevel 1 (
@@ -45,7 +45,7 @@ if /i "%~1"=="--check" (
 
 REM --- Step 2: free the ports if something is already bound -------------
 echo.
-echo [2/3] Freeing ports 5000 and 8501 if occupied...
+echo [2/5] Freeing ports 5000 and 8501 if occupied...
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":5000" ^| findstr LISTENING') do (
     echo    stopping PID %%p on port 5000
     taskkill /F /PID %%p >nul 2>&1
@@ -56,20 +56,25 @@ for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":8501" ^| findstr LISTENING'
 )
 timeout /t 2 /nobreak >nul
 
-REM --- Step 3: phone backend -------------------------------------------
+REM --- Step 3: room backend ---------------------------------------------
 echo.
-echo [3/3] Starting phone demo backend (server.py)...
-start "QDS Phone Backend" cmd /k "%PY% server.py"
+echo [3/5] Starting room backend (server.py)...
+start "QDS Room Backend" cmd /k "%PY% server.py"
 timeout /t 6 /nobreak >nul
 
 REM --- Step 4: analytics dashboard -------------------------------------
 echo.
-echo Starting analytics dashboard (app.py)...
+echo [4/5] Starting analytics dashboard (app.py)...
 start "QDS Dashboard" cmd /k "%PY% -m streamlit run app.py --server.port 8501"
 timeout /t 8 /nobreak >nul
 
-REM --- Step 5: open both ------------------------------------------------
-start "" http://localhost:5000
+REM --- Step 5: open the room -------------------------------------------
+echo.
+echo [5/5] Opening room and dashboard in the browser...
+REM Open /room rather than / -- the room is the live demo, and the landing
+REM page is only a chooser. A judge or phone that lands on / should see the
+REM room immediately.
+start "" http://localhost:5000/room
 start "" http://localhost:8501
 
 echo.
@@ -77,8 +82,11 @@ echo ===================================================================
 echo  BOTH SERVERS STARTED
 echo ===================================================================
 echo.
-echo  Dashboard      http://localhost:8501
-echo  Phone demo     http://localhost:5000
+echo  Room (device 1)     http://localhost:5000/room
+echo  Attack console      http://localhost:5000/attack
+echo  Dashboard           http://localhost:8501
+echo.
+echo  Open the CONSOLE on a SECOND device with the room code.
 echo.
 "%PY%" network.py
 echo.

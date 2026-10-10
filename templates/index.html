@@ -3,38 +3,78 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QDS Phone Demo</title>
+<title>Quantum Digital Signature — Live Channel Demo</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="wrap">
   <div class="banner">
-    <div class="title">QDS LIVE — BIT MANIPULATION DEMO</div>
-    <div class="sub">Two devices, one quantum backend. Pick a role.</div>
+    <div class="title">QDS LIVE — INTERCEPTION ON A QUANTUM CHANNEL</div>
+    <div class="sub">Group room over a quantum digital signature link. Open on two devices.</div>
   </div>
 
   <div class="card">
-    <h1>Victim — send &amp; verify</h1>
-    <p class="note">Type a message, sign it, and share the session code with the
-    attacker. You will see what arrives and which bits were corrupted.</p>
-    <a href="/victim"><button class="ghost">OPEN VICTIM VIEW</button></a>
+    <h1>1 — Open the room</h1>
+    <p class="note">A WhatsApp-style channel. Many participants can talk, and every
+    message spends a fixed <b>transit window</b> in the channel with its bits
+    exposed. That window is the entire attack surface.</p>
+    <a href="/room"><button class="ghost">OPEN THE ROOM</button></a>
   </div>
 
   <div class="card">
-    <h1>Attacker — manipulate bits</h1>
-    <p class="note">Enter the victim's session code, choose an attack, and inject
-    it into the channel mid-transit.</p>
-    <a href="/attacker"><button class="ghost">OPEN ATTACKER VIEW</button></a>
+    <h1>2 — Open the attack console</h1>
+    <p class="note">Runs on a <b>second device</b>, at its own address, so participants
+    cannot see the inject button. Enter the room code, then act while a message
+    is in transit.</p>
+    <a href="/attack"><button class="ghost">OPEN ATTACK CONSOLE</button></a>
   </div>
 
   <div class="card">
-    <h1>How it works</h1>
-    <p class="note">Your laptop runs the quantum simulation (Qiskit). The phones
-    are remote controls that send instructions and render results — quantum
+    <h1>The demo, in four steps</h1>
+    <p class="note">
+      <b>1.</b> The room gives you a 4-letter code.<br>
+      <b>2.</b> Open the console on device 2 with that code.<br>
+      <b>3.</b> Send a message — everyone sees <b>transmitting…</b> and a countdown.
+      No plaintext appears before delivery, not even to the sender.<br>
+      <b>4.</b> The console turns amber. Inject <b>Replace text</b> before the
+      window closes. The room receives the substituted message, flagged
+      <b>TAMPERED</b>, then learns who attacked.
+    </p>
+  </div>
+
+  <div class="card">
+    <h1>What it checks</h1>
+    <p class="note">Per-bit integrity catches corruption. The quantum witness catches
+    substitution. Context binding catches replay — a genuine earlier signature
+    <i>passes</i> every quantum check and is stopped only because it is bound to a
+    stale session.</p>
+    <p class="note">Six attacks: bit-flip forgery, forgery by substitution, replay,
+    impersonation, channel manipulation, and an honest control.</p>
+  </div>
+
+  <div class="card">
+    <h1>Before you start</h1>
+    <p class="note">Both devices must be on the <b>same network</b> as this laptop.
+    Open the laptop's LAN address — for example
+    <span class="chip">http://192.168.137.1:5000/room</span> — not
+    <span class="chip">localhost</span>. If Windows asks about the firewall,
+    choose <b>Allow</b> on private networks.</p>
+    <p class="note">Your laptop runs the quantum simulation (Qiskit). Phones are
+    remote controls that send instructions and render results — quantum
     processing cannot run on a phone.</p>
-    <p class="note">Both devices must be on the <b>same WiFi</b>, and you open the
-    laptop's LAN address (for example <span class="chip">http://192.168.1.42:5000</span>)
-    rather than <span class="chip">localhost</span>.</p>
+  </div>
+
+  <div class="card">
+    <h1>Analytics dashboard</h1>
+    <p class="note">On the laptop at <span class="chip">http://localhost:8501</span>.
+    Room messages archive to the same database it reads, so an attack injected
+    from a phone appears in the SOC view with no manual step.</p>
+  </div>
+
+  <div class="card">
+    <h1>Single-shot fallback</h1>
+    <p class="note">For a simpler two-screen run: <a href="/victim">victim</a> and
+    <a href="/attacker">attacker</a>. Same quantum backend, one message at a time.</p>
   </div>
 </div>
 </body>

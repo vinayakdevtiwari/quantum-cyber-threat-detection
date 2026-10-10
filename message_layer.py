@@ -140,31 +140,9 @@ MIN_TRANSPARENT_ERRORS = 2
 # ---------------------------------------------------------------------------
 def _merge_substitution(original: list, other: list) -> tuple:
     """
-    Replace a message's bit pattern with an attacker's, padding or trimming
-    deliberately rather than by accident.
-
-    The earlier version copied `other` over `original` but kept the ORIGINAL
-    length. That silently truncated any replacement longer than the victim's
-    message: "hi" (16 bits) plus "gay" (24 bits) arrived as "ga", and "yes" plus
-    "no" arrived as "nos" -- Alice's surviving tail. The attacker typed a
-    sentence and got a different one, which reads as a broken attack rather than
-    the attack it is.
-
-    Here the attacker's message wins outright:
-      - longer  -> padded with zeros so the whole text is delivered. The extra
-                   trailing bytes decode as '.', which is how bits_to_text has
-                   always rendered unprintable values.
-      - shorter -> delivered exactly as typed, with nothing of Alice's left over.
-
-    The padding is not a fudge. Changing the length of the message is precisely
-    what an attacker who supplies their own content does, and the receiver's
-    length check is part of what catches it.
-
-    Returns (bits, padded_count).
+    Replace a message's bit pattern with an attacker's.
+    Delivers the attacker's message exactly as typed.
     """
-    if len(other) >= len(original):
-        padded = list(other) + [0] * (len(other) - len(original))
-        return padded, len(other) - len(original)
     return list(other), 0
 
 
@@ -646,8 +624,11 @@ def transit_bits(bits: list, shots: int = 256, noise_model=None,
     which meant a change to how noise was modelled had to be made in two
     places and the two could silently disagree.
     """
+    if not inject_noise:
+        return [int(b) for b in bits]
+
     rng = np.random.default_rng(seed if seed is not None else 20260101)
-    model = noise_model if inject_noise else None
+    model = noise_model
 
     transmitted = []
     for bit in bits:
@@ -687,9 +668,12 @@ def transmit_message(message: str, attack: str = ATTACK_NONE, seed=None,
                                  target_bits=target_bits, substitute=substitute,
                                  replay_bits=replay_bits)
 
+    has_substitute = attack in (ATTACK_SUBSTITUTE, ATTACK_REPLAY) or bool(substitute)
+    effective_inject_noise = inject_noise and not has_substitute
+
     transmitted = transit_bits(
         attack_result["bits"], shots=shots,
-        noise_model=noise_model, inject_noise=inject_noise, seed=seed,
+        noise_model=noise_model, inject_noise=effective_inject_noise, seed=seed,
     )
 
     verification = verify_message(original_bits, transmitted)

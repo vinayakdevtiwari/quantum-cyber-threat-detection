@@ -108,11 +108,18 @@ def _transit(room, msg, server):
     # The channel itself, via the same helper the single-shot path uses. Room
     # messages previously carried a separate copy of this loop, so a change to
     # the noise model had to be made twice and the two could drift apart.
+    has_substitute = any(
+        a.get("attack") in ("forgery_substitute", "replay")
+        or bool(a.get("params", {}).get("substitute"))
+        for a in msg.get("attacks", [])
+    )
+    inject_noise = not msg.get("noise_free", False) and not has_substitute
+
     transmitted = transit_bits(
         bits,
         shots=msg.get("shots", 96),
         noise_model=DEFAULT_NOISE_MODEL,
-        inject_noise=not msg.get("noise_free", False),
+        inject_noise=inject_noise,
         seed=random.randint(1, 10 ** 9),
     )
 

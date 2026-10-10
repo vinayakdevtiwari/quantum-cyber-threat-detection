@@ -101,6 +101,13 @@ def test_substitution_on_a_short_message_is_caught_by_the_witness():
     assert result["witness"]["verdict"] == "FORGERY PROVEN"
 
 
+def test_substitution_delivers_exact_replacement_text():
+    result = transmit_message("hi", attack=ATTACK_SUBSTITUTE, substitute="bye")
+    assert result["received_text"] == "bye"
+    assert result["verification"]["status"] == "TAMPERED"
+    assert result["witness"]["verdict"] == "FORGERY PROVEN"
+
+
 def test_single_flip_is_located_even_when_below_the_alarm_threshold():
     """
     One flipped bit is reported with its position, but does not raise SUSPECT:
