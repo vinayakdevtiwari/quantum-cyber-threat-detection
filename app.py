@@ -373,10 +373,10 @@ st.markdown(
       <div>
         <p class="soc-kicker">Quantum Cyber Threat Detection &middot; Team Project</p>
         <h1 class="soc-title">QUANTUM CYBER THREAT DETECTION</h1>
-        <p class="soc-sub">Quantum Digital Signature (QDS) session security posture</p>
+        <p class="soc-sub">QDS session security posture &middot; Team: Vinayak Dev Tiwari, Shivansh Tiwari, Ballabh Utkarsh Singh</p>
       </div>
       <div class="soc-meta">
-        <div><span class="soc-dot"></span>LINK LIVE</div>
+        <div><span class="soc-dot"></span>SIMULATION MODE</div>
         <div>WATCHDESK {now_utc}</div>
         <div>SIMULATION NODE QDS-ALPHA</div>
       </div>
