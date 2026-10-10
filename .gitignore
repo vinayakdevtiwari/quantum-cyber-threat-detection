@@ -10,6 +10,7 @@ env/
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
 
 # Editors / operating systems
 .vscode/
@@ -23,3 +24,8 @@ Thumbs.db
 htmlcov/
 dist/
 build/
+*.egg-info/
+
+# Debug and log files
+*.log
+debug_*.txt
