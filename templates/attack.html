@@ -116,6 +116,60 @@
   .entry .v { color: var(--text); }
   .entry.evil .v { color: var(--bad); }
 
+  /* ---- private-chat breach ---- */
+  .breach { border-color: #4a1f38; }
+  .breach h3 { color: var(--bad); }
+
+  .victim {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.55rem 0.6rem; border: 1px solid var(--line);
+    border-radius: 9px; margin-bottom: 0.4rem; cursor: pointer;
+    background: var(--panel2); font-size: 0.84rem;
+  }
+  .victim.sel { border-color: var(--bad); background: #2a1220; }
+  .victim .lock { font-size: 0.78rem; }
+  .victim .nm3 { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .victim .st { font-size: 0.62rem; color: var(--muted); font-family: ui-monospace, monospace; }
+
+  #breachNote { font-size: 0.7rem; color: var(--muted); line-height: 1.45; margin: 0.35rem 0; }
+
+  /* qubit strip */
+  .qubits {
+    display: flex; flex-wrap: wrap; gap: 2px; margin-top: 0.45rem;
+    font-family: ui-monospace, Menlo, monospace; font-size: 0.55rem;
+  }
+  .qb {
+    width: 13px; height: 15px; border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    background: #2a3245; color: #5d6b88;
+  }
+  .qb.hit  { background: #1c3a2e; color: var(--good); }
+  .qb.miss { background: #3d1424; color: var(--bad); font-weight: 700; }
+  .qbline { display: flex; gap: 0.6rem; font-size: 0.68rem; margin-top: 0.3rem; flex-wrap: wrap; }
+  .qbline span { color: var(--muted); }
+  .qbline b { font-family: ui-monospace, Menlo, monospace; }
+  .qbline b.g { color: var(--good); }
+  .qbline b.r { color: var(--bad); }
+
+  .barwrap { height: 7px; background: #2a3245; border-radius: 4px; overflow: hidden; margin-top: 0.4rem; }
+  .barwrap > i { display: block; height: 100%; background: var(--good); width: 0; transition: width .25s; }
+  .barwrap > i.low { background: var(--bad); }
+  .barwrap > i.mid { background: var(--warn); }
+  .thresh { height: 2px; background: var(--text); opacity: .65; margin-top: -3px; position: relative; }
+
+  #breachOut { font-size: 0.74rem; margin-top: 0.5rem; line-height: 1.5; }
+  #breachOut .big { font-weight: 700; font-size: 0.9rem; }
+  #breachOut .g { color: var(--good); }
+  #breachOut .r { color: var(--bad); }
+
+  button.mini {
+    background: #2a1220; color: var(--bad); border: 1px solid var(--bad);
+    border-radius: 8px; padding: 0.45rem 0.6rem; font-size: 0.72rem;
+    font-weight: 700; cursor: pointer; flex: 1;
+  }
+  button.mini:disabled { opacity: .45; cursor: not-allowed; }
+  .btnrow { display: flex; gap: 0.4rem; margin-top: 0.45rem; }
+
   /* join */
   #join { position: fixed; inset: 0; background: var(--bg); z-index: 50;
           display: flex; align-items: center; justify-content: center; padding: 1.2rem; }
@@ -182,6 +236,24 @@
     <div id="msg"></div>
   </div>
 
+  <div class="card breach">
+    <h3>🔓 Private chat breach</h3>
+    <div id="breachBody">
+      <p id="breachNote">No private conversations in this room.</p>
+      <div id="victimList"></div>
+
+      <div id="breachCtl" style="display:none;">
+        <div class="btnrow">
+          <button class="mini" id="bGuess">⚡ GUESS</button>
+          <button class="mini" id="bSeedGuess">🎯 GUESS EXACT LENGTH</button>
+        </div>
+        <div class="lbl">Qubit length to claim</div>
+        <input type="text" id="bLen" placeholder="e.g. 96" inputmode="numeric">
+        <div id="breachOut"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="card">
     <h3>Activity</h3>
     <div id="log"><div class="entry"><span class="v" style="color:#8fa0bf">idle</span></div></div>
@@ -208,6 +280,11 @@ let lastState = null, lastStateAt = 0;
 let pendingJoin = null, joinMeta = null;
 let selected = 'forgery_substitute';
 let injectedThisWindow = false;
+
+// Private-chat breach state.
+let breachVictim = null;      // conversation id being attacked
+let lastBreach = null;        // most recent gate verdict
+let lastVictimLen = null;     // length that last got a verdict, so it persists
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s)
@@ -286,8 +363,20 @@ function handle(m) {
     log('injected ' + m.attack, true);
     return;
   }
+  if (m.type === 'dm_opened') { render(lastState); return; }
+  if (m.type === 'dm_access_result') {
+    // The verdict arrives here and NOWHERE else. The room is only told when
+    // access is actually granted, so a denied attempt stays private -- which is
+    // the whole point of a private chat.
+    lastBreach = m;
+    renderBreachOut();
+    log((m.granted ? 'BREACH SUCCEEDED ' : 'breach denied ') + pct(m.match_rate), true);
+    return;
+  }
   if (m.type === 'error') { $('msg').className = 'err'; $('msg').textContent = m.error; return; }
 }
+
+const pct = v => (v == null ? 0 : Math.round(v * 100)) + '%';
 
 function log(text, evil) {
   const box = $('log');
@@ -332,7 +421,110 @@ function render(state) {
   if (targetMsgId) sel.value = targetMsgId;
 
   $('inject').disabled = !targetMsgId;
+  renderBreach();
 }
+
+// ------------------------------------------------------ private-chat breach
+
+// Why Eve needs the exact bit length, and cannot get it from the UI.
+//
+// The gate refuses a candidate of the wrong length outright. Eve is in the
+// room but has no plaintext, so she does not know how many bits the last
+// message used. That is not a gap in the demo, it IS the demo: she can
+// enumerate lengths, and every attempt still fails because length is not the
+// secret -- the key is.
+function renderBreach() {
+  const box = $('victimList');
+  const note = $('breachNote');
+  const ctl = $('breachCtl');
+  if (!box) return;
+
+  // Only DMs she cannot read are targets. A chat she is already in is not a
+  // breach, and offering it would invite the operator to waste a run.
+  const dms = (lastState.conversations || []).filter(c => c.kind === 'dm' && c.locked);
+
+  if (!dms.length) {
+    box.innerHTML = '';
+    note.style.display = '';
+    note.textContent = 'No private conversations in this room.';
+    ctl.style.display = 'none';
+    return;
+  }
+
+  note.style.display = 'none';
+  box.innerHTML = '';
+  dms.forEach(c => {
+    const d = document.createElement('div');
+    d.className = 'victim' + (c.id === breachVictim ? ' sel' : '');
+    d.innerHTML = `<span class="lock">🔒</span><span class="nm3">${esc(c.title || c.id)}</span>`
+                + `<span class="st">${c.member_count} members</span>`;
+    d.onclick = () => {
+      breachVictim = c.id;
+      lastBreach = null;
+      renderBreach();
+    };
+    box.appendChild(d);
+  });
+
+  ctl.style.display = breachVictim ? '' : 'none';
+  if (breachVictim && lastVictimLen != null) $('bLen').value = lastVictimLen;
+}
+
+function attemptBreach(exactLen) {
+  if (!breachVictim) return;
+  const raw = $('bLen').value.trim();
+  const n = parseInt(raw, 10);
+  if (!raw || !Number.isFinite(n) || n <= 0) {
+    $('breachOut').innerHTML = `<span class="r">Enter a bit length.</span>`;
+    return;
+  }
+  lastVictimLen = n;
+
+  // The candidate is generated HERE, on the attacker side. The server never
+  // offers to help build one -- if it did, the whole attack would be pointless.
+  const bits = [];
+  for (let i = 0; i < n; i++) bits.push(Math.random() < 0.5 ? 0 : 1);
+
+  $('breachOut').innerHTML = `<span style="color:#8fa0bf">presenting ${n} guessed bit(s)…</span>`;
+  log(`breach attempt, ${n} bit(s) guessed`);
+  socketSend({ type: 'dm_access', conversation_id: breachVictim,
+               candidate_bits: bits, shots: 96 });
+}
+
+function renderBreachOut() {
+  const r = lastBreach;
+  if (!r) return;
+  const out = $('breachOut');
+  const ok = r.granted;
+  const need = r.threshold || 0.9;
+
+  // Only the first 120 qubits are drawn. A 512-qubit message would render 512
+  // tiny boxes and push everything else off the screen on a phone; the bar and
+  // the counts carry the real information.
+  const rows = (r.rows || []).slice(0, 120);
+  const strip = rows.map(x =>
+    `<div class="qb ${x.status === 'MATCH' ? 'hit' : 'miss'}" title="${x.index}">${x.status === 'MATCH' ? '·' : '✕'}</div>`
+  ).join('');
+
+  const barW = Math.min(100, Math.max(0, (r.match_rate || 0) * 100));
+  const cls = ok ? '' : (barW >= need * 100 ? 'mid' : 'low');
+
+  out.innerHTML =
+    `<div class="big ${ok ? 'g' : 'r'}">${ok ? '🔓 ACCESS GRANTED' : '🔒 ACCESS DENIED'}</div>`
+    + `<div>matched <b>${pct(r.match_rate)}</b> of qubits · required <b>${pct(need)}</b></div>`
+    + `<div class="barwrap"><i class="${cls}" style="width:${barW}%"></i></div>`
+    + `<div class="thresh" style="margin-left:${Math.min(100, need * 100)}%"></div>`
+    + `<div class="qbline">`
+      + `<span><b class="g">${r.total - (r.mismatches || 0)}</b> match</span>`
+      + `<span><b class="r">${r.mismatches || 0}</b> mismatch</span>`
+      + (r.total > rows.length ? `<span>showing ${rows.length}/${r.total}</span>` : '')
+    + `</div>`
+    + `<div class="qubits">${strip}</div>`
+    + `<div style="margin-top:.45rem;color:#8fa0bf">${esc(r.explanation || '')}</div>`;
+}
+
+$('bGuess').onclick = () => attemptBreach(false);
+$('bSeedGuess').onclick = () => attemptBreach(true);
 
 setInterval(() => {
   if (!lastState) return;
