@@ -42,10 +42,19 @@ from message_layer import (
 
 # Sessions survive Streamlit reruns but NOT a process restart. That is
 # acceptable for a live demo and keeps the state layer trivial.
-if "qds_sessions" not in st.session_state:
-    st.session_state.qds_sessions = {}
-
-SESSIONS = st.session_state.qds_sessions
+#
+# This MUST be a module-level dict, not st.session_state.
+#
+# st.session_state is scoped to ONE browser session, so the victim wrote its
+# session into its own dict and the attacker read from a different, empty one.
+# The symptom was total: no session ever crossed between the two windows, so
+# nothing could join and no message could be received. The docstring above has
+# always said the opposite of what the code did; this is now what it describes.
+#
+# Streamlit re-executes this module on every interaction, but a module-level
+# name is rebuilt only when the process starts, so the dict survives reruns --
+# which is the property that is actually needed here.
+SESSIONS = {}
 
 PRESETS = [
     "TRANSFER $5000",
