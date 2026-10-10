@@ -123,6 +123,88 @@ def encrypt(message_bits, pad):
     return [int(m) ^ int(k) for m, k in zip(message_bits, pad)]
 
 
+# ---------------------------------------------------------------------------
+# ROOM KEY DERIVATION  (private-message access control)
+# ---------------------------------------------------------------------------
+#
+# A room holds ONE master seed. Every conversation inside it -- every private
+# chat and the group -- derives its own key from that seed by naming its own
+# conversation id.
+#
+# WHY ONE SEED AND NOT A KEY PER CONVERSATION
+# --------------------------------------------
+# A per-conversation key makes a stolen key worthless beyond the one chat it
+# came from, which is the correct design in production and useless for this
+# demo: leaking one DM would let an attacker re-read that same DM, which they
+# could already do legitimately. There would be no escalation to demonstrate.
+#
+# With a shared master seed the story is the one worth telling: Eve harvests a
+# witness from a conversation she was legitimately part of, and that single
+# harvest compromises every other conversation in the room. That is also how
+# real QKD key management behaves -- one shared secret, session-wide.
+#
+# WHAT THIS IS NOT
+# ----------------
+# derive_conversation_key is a deterministic hash, not a quantum process. It
+# does NOT derive keys from a quantum channel and no claim is made that it
+# does. The quantum part of this system is what happens downstream: the pad
+# output here is what build_witness() measures qubit by qubit, and
+# verify_witness() is what decides whether an attacker holds a real key or is
+# guessing. Guessing does not clear that gate -- see gate_access().
+#
+# The master seed is never transmitted. It lives only in the room's memory and
+# is what an attacker must obtain.
+
+MASTER_SEED_BYTES = 32
+
+
+def new_master_seed() -> str:
+    """Mint a room's master seed from OS entropy."""
+    import secrets
+
+    return secrets.token_hex(MASTER_SEED_BYTES)
+
+
+def derive_conversation_key(master_seed, conversation_id, bit_len: int) -> list:
+    """
+    Derive one conversation's key from the room's master seed.
+
+    Deterministic: the same (seed, conversation_id, bit_len) always yields the
+    same key. That is what lets a participant re-derive a key later without it
+    ever being sent, and it is what makes verify_witness reproducible.
+
+    `bit_len` is the bit length of the message being protected, so the pad
+    matches the message exactly -- encrypt() rejects a length mismatch, and
+    silently padding or trimming here would corrupt the pad.
+
+    A distinct conversation_id yields an unrelated key. Two conversations with
+    the same plaintext therefore produce different ciphertext, so an observer
+    cannot tell that two users sent the same words.
+    """
+    import hashlib
+
+    if bit_len < 0:
+        raise ValueError(f"bit_len must be non-negative, got {bit_len}")
+
+    label = f"{master_seed}|{conversation_id}".encode("utf-8")
+    key = []
+    counter = 0
+    # Hash-and-counter rather than one hash stretched to length: truncating a
+    # single digest would make long pads share a prefix, so two conversations
+    # would agree on their opening bits.
+    while len(key) < bit_len:
+        digest = hashlib.sha256(label + counter.to_bytes(4, "big")).digest()
+        # Unpack each byte into its bits. A byte is 0-255, not 0/1, and handing
+        # those straight to encrypt() would XOR plaintext against numbers up to
+        # 255 -- producing "bits" that are not bits at all, and a witness built
+        # over them would match nothing, including itself.
+        for byte in digest:
+            for shift in range(7, -1, -1):
+                key.append((byte >> shift) & 1)
+        counter += 1
+    return key[:bit_len]
+
+
 def _measure_fidelity(bit: int, shots: int = 256,
                       noise_model=DEFAULT_NOISE_MODEL) -> float:
     """
@@ -258,6 +340,82 @@ def verify_witness(witness, presented_bits, floor: float = WITNESS_FLOOR):
         "proven_forgeries": confident_mismatches,
         "total": total,
         "forgery_probability": (0.5 ** confident_mismatches) if confident_mismatches else 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# PRIVATE-CHAT ACCESS GATE
+# ---------------------------------------------------------------------------
+
+ACCESS_GRANTED = "ACCESS GRANTED"
+ACCESS_DENIED = "ACCESS DENIED"
+
+
+def build_conversation_witness(master_seed, conversation_id, message_bits,
+                               shots: int = 256, noise_model=DEFAULT_NOISE_MODEL):
+    """
+    A conversation's witness: what its members hold that an outsider lacks.
+
+    Built by padding the plaintext with the conversation's derived key and then
+    measuring the resulting wire bits, which is the same thing that physically
+    happens to a message on the way down the channel. The witness is therefore
+    over the PADDED bits, not the plaintext -- so an attacker holding the
+    plaintext still cannot match it.
+
+    Returns {"key": [...], "wire_bits": [...], "witness": [...]}. `key` must NOT
+    be sent to any participant; it is the secret the witness stands in for.
+    """
+    bits = [int(b) & 1 for b in message_bits]
+    key = derive_conversation_key(master_seed, conversation_id, len(bits))
+    wire = encrypt(bits, key)
+    witness = build_witness(wire, shots=shots, noise_model=noise_model)
+    return {"key": key, "wire_bits": wire, "witness": witness}
+
+
+def gate_access(conversation_witness, candidate_bits, floor: float = WITNESS_FLOOR):
+    """
+    Decide whether a candidate may read a private conversation.
+
+    This is verify_witness() used as an access-control decision rather than a
+    forgery detector. The caller presents the bits they believe are on the wire;
+    if those agree with the stored witness the caller holds a real key, and if
+    they disagree the caller was guessing.
+
+    Guessing does not get in. verify_witness() reports FORGERY_PROVEN once more
+    than 5% of qubits mismatch confidently, and a guess mismatches roughly half
+    of them, so a guess is rejected by a wide margin. That margin is the whole
+    reason this gate is worth building on quantum state rather than on a
+    password: the attacker gets unlimited attempts and the odds stay against
+    her, because producing a candidate that matches a witness requires the key.
+
+    Only an exact VERIFIED grants access. INCONCLUSIVE denies -- a partial match
+    is a near-miss from noise or a truncated attempt, and neither is a reason to
+    hand over a private conversation.
+    """
+    result = verify_witness(conversation_witness, candidate_bits, floor=floor)
+    granted = result["verdict"] == VERIFIED
+
+    return {
+        "granted": granted,
+        "verdict": ACCESS_GRANTED if granted else ACCESS_DENIED,
+        "witness_verdict": result["verdict"],
+        "match_rate": (
+            round((result["total"] - result["mismatches"]) / result["total"], 4)
+            if result["total"] else 0.0
+        ),
+        "rows": result["rows"],
+        "total": result["total"],
+        "mismatches": result["mismatches"],
+        "proven_forgeries": result["proven_forgeries"],
+        "forgery_probability": result["forgery_probability"],
+        "explanation": (
+            "Candidate agrees with the stored quantum witness on every qubit. "
+            "That requires holding the conversation key, so access is granted."
+            if granted else
+            f"{result['proven_forgeries']} of {result['total']} qubits mismatched "
+            f"confidently ({result['verdict']}). Producing a matching witness "
+            f"requires the key; guessing does not scale. Access denied."
+        ),
     }
 
 

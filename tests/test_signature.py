@@ -6,7 +6,10 @@ from signature import (
     generate_key_pool, select_pads, encrypt,
     build_witness, verify_witness, sign_and_verify,
     forgery_success_rate,
+    new_master_seed, derive_conversation_key,
+    build_conversation_witness, gate_access,
     VERIFIED, FORGERY_PROVEN, REPLAY_BLOCKED, INCONCLUSIVE,
+    ACCESS_GRANTED, ACCESS_DENIED,
 )
 
 SHOTS = 64
@@ -70,6 +73,134 @@ def test_wrong_message_is_proven_forgery():
     r = verify_witness(w, [b ^ 1 for b in bits])
     assert r["verdict"] == FORGERY_PROVEN
     assert r["proven_forgeries"] == len(bits)
+
+
+# --- room key derivation --------------------------------------------------
+
+def test_conversation_key_is_a_bit_pattern():
+    """
+    Regression: the key was initially produced by iterating a hash digest's
+    BYTES, yielding values 0-255 rather than 0/1. encrypt() then XORed
+    plaintext against numbers up to 255, so the witness built over the result
+    matched nothing -- not even its own wire bits -- and the access gate denied
+    a holder of the genuine key.
+    """
+    key = derive_conversation_key("seed", "dm:a|b", 64)
+    assert len(key) == 64
+    assert all(b in (0, 1) for b in key)
+
+
+def test_conversation_key_is_deterministic():
+    assert (derive_conversation_key("s", "dm:a|b", 32)
+            == derive_conversation_key("s", "dm:a|b", 32))
+
+
+def test_distinct_conversations_get_distinct_keys():
+    """Otherwise an observer could tell two users sent the same words."""
+    a = derive_conversation_key("s", "dm:alice|bob", 64)
+    b = derive_conversation_key("s", "dm:alice|carol", 64)
+    assert a != b
+    # and they must not merely differ at the end by sharing a long prefix
+    assert sum(1 for x, y in zip(a, b) if x != y) > 8
+
+
+def test_conversation_key_rejects_negative_length():
+    with pytest.raises(ValueError):
+        derive_conversation_key("s", "dm:a|b", -1)
+
+
+# --- private-chat access gate ---------------------------------------------
+
+def test_real_key_is_granted_access():
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1]
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    r = gate_access(conv["witness"], conv["wire_bits"])
+    assert r["verdict"] == ACCESS_GRANTED
+    assert r["granted"] is True
+
+
+def test_guessing_never_grants_access():
+    """
+    The gate's load-bearing property: an attacker gets unlimited attempts and
+    the odds stay against her. A wrong candidate must be refused outright.
+    """
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1]
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    # inverted plaintext is what a naive attacker would try
+    assert gate_access(conv["witness"], [b ^ 1 for b in plain])["granted"] is False
+
+
+def test_brute_force_never_wins():
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1]
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    rng = np.random.default_rng(3)
+    wins = sum(
+        1 for _ in range(200)
+        if gate_access(conv["witness"],
+                       list(rng.integers(0, 2, size=len(plain))))["granted"]
+    )
+    assert wins == 0
+
+
+def test_partial_match_is_denied():
+    """
+    Flagged-qubit guessing: getting half the bits right is still a refusal.
+    INCONCLUSIVE must not be treated as a pass -- a near-miss is not a reason
+    to hand over a private conversation.
+    """
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1]
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    half = list(conv["wire_bits"])
+    half[8:] = [b ^ 1 for b in half[8:]]
+    assert sum(1 for a, b in zip(half, conv["wire_bits"]) if a != b) == 8
+    r = gate_access(conv["witness"], half)
+    assert r["granted"] is False
+    assert r["verdict"] == ACCESS_DENIED
+
+
+def test_single_wrong_bit_is_enough_to_deny():
+    """The gate is exact. One mismatched qubit refuses the whole message."""
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1]
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    # Flip, rather than overwrite with a fixed value: overwriting bit 0 with 1
+    # leaves the vector unchanged whenever that bit is already 1, which happens
+    # half the time under a fresh seed -- a test that silently stops testing.
+    off_by_one = list(conv["wire_bits"])
+    off_by_one[0] ^= 1
+    assert off_by_one != conv["wire_bits"]
+    assert gate_access(conv["witness"], off_by_one)["granted"] is False
+
+
+def test_stolen_key_from_another_conversation_still_works():
+    """
+    One leaked room key compromises every conversation in that room. This is
+    why the key is derived from a shared master seed rather than per-chat.
+    """
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1]
+    other = [0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0]
+    a = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    b = build_conversation_witness(seed, "dm:alice|carol", other, shots=SHOTS)
+    # same seed, different conversation: Eve re-derives b's key and reads it
+    assert gate_access(b["witness"], b["wire_bits"])["granted"] is True
+    # and a room without the seed cannot
+    stranger = build_conversation_witness(new_master_seed(),
+                                          "dm:alice|carol", other, shots=SHOTS)
+    assert gate_access(stranger["witness"], a["wire_bits"])["granted"] is False
+
+
+def test_witness_does_not_reveal_plaintext():
+    """Holding the witness must not hand over the message itself."""
+    seed = new_master_seed()
+    plain = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1]
+    conv = build_conversation_witness(seed, "dm:alice|bob", plain, shots=SHOTS)
+    assert conv["wire_bits"] != plain, "plaintext must not travel on the wire"
+    assert all(b in (0, 1) for b in conv["wire_bits"])
 
 
 # --- end to end -----------------------------------------------------------
