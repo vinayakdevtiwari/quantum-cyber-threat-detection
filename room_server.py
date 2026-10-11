@@ -511,7 +511,8 @@ def register_socket_routes(app, sock, server):
                     if err:
                         send({"type": "error", "error": err})
                     else:
-                        send({"type": "dm_opened", "conversation": conv.public(pid)})
+                        send({"type": "dm_opened",
+                              "conversation": conv.public(pid, room=room)})
                         broadcast(room)
                     continue
 

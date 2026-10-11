@@ -502,6 +502,86 @@ def test_gate_refuses_an_empty_conversation():
     assert err is not None
 
 
+def test_dm_title_is_the_other_person_for_each_viewer():
+    """
+    A DM is one row in the list but two different conversations to read.
+
+    Alice and Bob have the same private chat. Alice looks for "Bob" and Bob
+    looks for "Alice". A single stored title can only be right for one of them,
+    and whichever was wrong showed the reader their OWN name -- which reads as
+    being in a chat with yourself.
+    """
+    room = _room()
+    new = room.join("new")
+    meow = room.join("meow")
+
+    conv, err = room.open_dm(new, meow.id)
+    assert err is None
+
+    new_row = next(c for c in room.state(viewer_id=new.id)["conversations"]
+                   if c["id"] == conv.id)
+    meow_row = next(c for c in room.state(viewer_id=meow.id)["conversations"]
+                    if c["id"] == conv.id)
+
+    assert new_row["title"] == "meow", "the opener must see the other person"
+    assert meow_row["title"] == "new", "the other side must see the opener"
+    assert new_row["title"] != meow_row["title"]
+
+
+def test_dm_title_follows_a_rename():
+    """
+    The name is resolved per viewer rather than stored at open time, so a
+    participant who renames shows their new name immediately.
+    """
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    conv, _ = room.open_dm(alice, bob.id)
+
+    bob.name = "Bobby"
+    row = next(c for c in room.state(viewer_id=alice.id)["conversations"]
+               if c["id"] == conv.id)
+    assert row["title"] == "Bobby"
+
+
+def test_group_title_is_not_the_other_person():
+    """The per-viewer title applies to DMs only. The group keeps the room name."""
+    room = _room()
+    room.name = "Team"
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    group = room.group_conversation()
+
+    for viewer in (alice, bob):
+        row = next(c for c in room.state(viewer_id=viewer.id)["conversations"]
+                   if c["id"] == group.id)
+        assert row["title"] == "Team"
+
+
+def test_dm_title_for_a_non_member_is_the_stored_title():
+    """
+    An outsider still sees a name so the locked row is renderable, but it is
+    NOT resolved per viewer. To someone outside the chat there are two other
+    people and no single "other", so resolving one would name whichever sorted
+    first -- an arbitrary choice that shifts with the ids.
+
+    Regression: an earlier version did exactly that, and the title differed
+    between runs purely because of id ordering.
+    """
+    room = _room()
+    alice = room.join("Alice")
+    bob = room.join("Bob")
+    eve = room.join("Eve", is_attacker=True)
+    conv, _ = room.open_dm(alice, bob.id)
+
+    row = next(c for c in room.state(viewer_id=eve.id)["conversations"]
+               if c["id"] == conv.id)
+    assert row["locked"] is True
+    assert row["is_member"] is False
+    # the name the chat was opened with
+    assert row["title"] == conv.title
+
+
 def test_conversation_list_marks_locked_dms():
     """The console needs a 'locked' row to render, and it must not imply access."""
     room = _room()

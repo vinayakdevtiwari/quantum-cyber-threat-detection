@@ -203,12 +203,37 @@ class Conversation:
             return True
         return participant_id in self.member_ids
 
-    def public(self, viewer_id=None):
-        """Per-viewer summary. Never carries message content -- see Room.state."""
+    def public(self, viewer_id=None, room=None):
+        """Per-viewer summary. Never carries message content -- see Room.state.
+
+        For a DM the title is the OTHER participant's name, not a single stored
+        string. One conversation between Alice and Bob is one row in the list,
+        but each of them is looking for the other person -- Alice wants to see
+        "Bob" and Bob wants to see "Alice". A single title field can only be
+        right for one of them, and whichever was wrong showed the reader their
+        own name, which looks like the chat is with themselves.
+
+        Resolving the name per viewer rather than storing it also means a
+        participant who renames is reflected immediately, instead of the list
+        keeping whichever name happened to be current when the chat was opened.
+
+        Only a MEMBER gets the per-viewer treatment. To anyone outside the
+        conversation there are two other people and no single "other", so
+        picking whichever sorted first would name an arbitrary one and change
+        with the ids. An outsider gets the stored title instead, which is the
+        name the chat was opened with.
+        """
+        title = self.title
+        if (self.kind == CONV_DM and room is not None
+                and viewer_id is not None and self.is_member(viewer_id)):
+            other_id = next(
+                (m for m in sorted(self.member_ids) if m != viewer_id), None)
+            other = room.participants.get(other_id) if other_id else None
+            title = other.name if other is not None else self.title
         return {
             "id": self.id,
             "kind": self.kind,
-            "title": self.title,
+            "title": title,
             "members": sorted(self.member_ids),
             "member_count": len(self.member_ids),
             "is_member": self.is_member(viewer_id),
@@ -599,18 +624,16 @@ class Room:
             # A non-member still sees the DM EXISTS -- that is what makes the
             # attack console's "locked conversation" row meaningful -- but not
             # its contents.
+            #
+            # The title comes from Conversation.public() so it is resolved per
+            # viewer. Reading conv.title directly here would give both sides of
+            # a DM the same name, which is correct for at most one of them.
             convs = []
             for cid, conv in self.conversations.items():
-                granted = self.can_read(conv, viewer_id)
-                convs.append({
-                    "id": conv.id,
-                    "kind": conv.kind,
-                    "title": conv.title,
-                    "member_count": len(conv.member_ids),
-                    "is_member": conv.is_member(viewer_id),
-                    "granted": granted,
-                    "locked": not granted,
-                })
+                info = conv.public(viewer_id=viewer_id, room=self)
+                info["granted"] = self.can_read(conv, viewer_id)
+                info["locked"] = not info["granted"]
+                convs.append(info)
 
             return {
                 "code": self.code,
