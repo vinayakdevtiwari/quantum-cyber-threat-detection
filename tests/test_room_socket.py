@@ -341,7 +341,64 @@ def test_eve_cannot_see_dm_content_over_the_socket(room):
     assert _delivered(bob.state(), "PAYROLL SECRET 9000")
 
 
+def test_dm_does_not_reach_a_third_party(room):
+    """
+    A room member who is neither a DM participant NOR an attacker must not see
+    the conversation.
+
+    Distinct from the Eve test: Eve is the declared threat model, while a third
+    party is ordinary traffic. If the privacy boundary only held against the
+    attacker it would not be a privacy boundary at all.
+    """
+    alice = room("Alice")
+    bob = room("Bob")
+    carol = room("Carol")   # in the room, not in the chat, not an attacker
+
+    conv_id = _open_dm(alice, bob.id)
+    alice.send({"type": "send", "text": "BOARD MINUTES 4471", "shots": 64,
+                "conversation_id": conv_id})
+
+    assert bob.wait_for(lambda s: _delivered(s, "BOARD MINUTES 4471"),
+                        seconds=45) is not None
+    carol.drain(seconds=1.5)
+
+    assert carol.frames, "Carol received no frames at all"
+    assert "BOARD MINUTES 4471" not in json.dumps(carol.frames), (
+        "DM plaintext leaked to a third party in the room")
+
+    entry = [m for m in (carol.state() or {"messages": []})["messages"]
+             if m["id"]]
+    assert all(m["readable"] is False for m in entry
+               if m.get("conversation_kind") == "dm"), (
+        "Carol was marked able to read a chat she is not part of")
+
+
+def test_every_member_sees_the_whole_roster(room):
+    """
+    The members list must not be filtered by who is looking.
+
+    An earlier report said a participant only appeared to themselves. The roster
+    is deliberately the same for everyone -- the per-viewer difference is the
+    `mine` highlight, which marks YOU and is not a statement about whether
+    anyone else can see you.
+    """
+    alice = room("Alice")
+    room("Bob")
+    room("Carol")
+    eve = room("Eve", attacker=True)
+
+    for sock in (alice, eve):
+        state = sock.wait_for(
+            lambda s: len(s["participants"]) == 4, seconds=6
+        )
+        assert state is not None, "the roster never reached 4 participants"
+        names = {p["name"] for p in state["participants"]}
+        assert names == {"Alice", "Bob", "Carol", "Eve"}, names
+
+
 def test_dm_row_appears_locked_for_the_attacker(room):
+    """Eve sees the conversation exists but cannot read it."""
+    alice = room("Alice")
     """Eve sees the conversation exists but cannot read it."""
     alice = room("Alice")
     bob = room("Bob")
