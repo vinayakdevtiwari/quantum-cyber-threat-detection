@@ -78,6 +78,45 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    position: relative;
+    transition: width .16s ease, padding .16s ease;
+  }
+
+  /* Collapsed sidebar: the chat and members lists slide out of the way so the
+     conversation gets the full width. Kept in the layout rather than hidden with
+     display:none so the toggle handle can sit on the boundary and stay
+     reachable -- a sidebar removed entirely would leave no way to bring it back
+     except a reload. */
+  #side.collapsed {
+    width: 0;
+    padding: 0;
+    border-right: 0;
+    overflow: visible;
+  }
+  #side.collapsed > *:not(#collapseBtn) { display: none; }
+
+  #collapseBtn {
+    position: absolute;
+    top: 50%;
+    right: -17px;
+    transform: translateY(-50%);
+    width: 17px;
+    height: 54px;
+    padding: 0;
+    background: var(--panel2);
+    color: var(--accent);
+    border: 1px solid var(--line);
+    border-left: 0;
+    border-radius: 0 8px 8px 0;
+    cursor: pointer;
+    font-size: 0.8rem;
+    line-height: 1;
+    z-index: 15;
+  }
+  #collapseBtn:active { background: var(--accent); color: #fff; }
+  #side.collapsed #collapseBtn {
+    right: -17px;
+    border-radius: 0 8px 8px 0;
   }
   .sidehead {
     font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.1em;
@@ -348,6 +387,8 @@
 
 <main>
   <aside id="side">
+    <button id="collapseBtn" type="button"
+            title="Hide chats and members" aria-label="Collapse sidebar">&#10094;</button>
     <div class="sidehead">
       <span>Chats</span>
       <button id="newDmBtn" title="New private chat">+</button>
@@ -413,9 +454,17 @@ let lastStateAt = 0;
 let reconnectTimer = null;
 let pingTimer = null;
 
-// Which conversation is open. Null means "show the group", which is where
-// everyone lands first -- nobody should have to hunt for the room's main chat.
+// Which conversation is open. The GROUP is the default landing place --
+// nobody should have to hunt for the room's main chat.
+//
+// The group is a real conversation on the server, with a real id of the form
+// "group:ABCD", and its messages carry that same id. It is NOT a null id: the
+// server hands every message a conversation_id, and a client that assumes the
+// group is signalled by a falsy one will render the group chat empty while
+// private chats work perfectly. groupConvId is learned from the first state
+// snapshot, because the room code is not known here until join resolves.
 let activeConv = null;
+let groupConvId = null;
 
 // Per-conversation unread tracking. Client-side only: the server has no notion
 // of "read", and adding one would mean persisting state per socket for no
@@ -512,6 +561,11 @@ function handle(m) {
     // Carry the room code into the console URL so the operator does not have to
     // read four characters off a phone screen and type them.
     $('consoleLink').href = '/attack?c=' + encodeURIComponent(m.room);
+    // Restore the sidebar preference for this room. Done here rather than at
+    // load because the room code is only known once join resolves.
+    try {
+      setSidebar(localStorage.getItem('qds_side_' + m.room) === '1');
+    } catch (e) {}
     render(m.state);
     $('text').focus();
     return;
@@ -573,6 +627,17 @@ function render(state) {
   // countdown does not drift by however far the two disagree.
   serverSkew = (state.server_time || 0) - lastStateAt;
 
+  // Learn the group's real conversation id the first time we see one. Until
+  // this is known the group cannot be rendered, because its messages are
+  // tagged with that id rather than being untagged.
+  if (groupConvId === null) {
+    const gc = (state.conversations || []).find(c => c.kind === 'group');
+    if (gc) {
+      groupConvId = gc.id;
+      if (activeConv === null) activeConv = gc.id;
+    }
+  }
+
   renderMembers(state);
   renderChatList(state);
 
@@ -584,7 +649,7 @@ function render(state) {
   if (locked) renderLockPanel(conv);
 
   if (!locked) {
-    const visible = state.messages.filter(m => (m.conversation_id || null) === activeConv);
+    const visible = state.messages.filter(m => convIdOf(m) === activeConv);
     const log = $('log');
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
     log.innerHTML = '';
@@ -597,6 +662,17 @@ function render(state) {
 
   tickCountdowns();
   markActiveChat();
+}
+
+// The conversation a message belongs to.
+//
+// Messages are read back against this, and the group is the case that has to
+// be handled carefully: it HAS an id ("group:CODE"), so the id cannot be
+// assumed absent. Older snapshots from a server before conversations existed
+// leave it unset, so an untagged message is treated as group traffic rather
+// than dropped -- that keeps an old room readable instead of blank.
+function convIdOf(m) {
+  return m.conversation_id || groupConvId;
 }
 
 function currentConv(state) {
@@ -622,14 +698,16 @@ function renderChatList(state) {
   const list = $('chatList');
   list.innerHTML = '';
 
-  // The group is always first and is not in state.conversations until something
-  // touches it, so it is synthesised here to guarantee it is always listed.
-  const groupMessages = state.messages.filter(m => !m.conversation_id);
+  // The group is always listed first, even before the server has published a
+  // conversation object for it, because a room whose main chat is missing from
+  // its own list looks broken. Its messages are selected by conversation id
+  // rather than by "has no conversation id" -- the group DOES have one.
+  const groupMessages = state.messages.filter(m => convIdOf(m) === groupConvId);
   const groupConv = (state.conversations || []).find(c => c.kind === 'group');
   const rows = [{
-    id: null,
+    id: groupConvId,
     kind: 'group',
-    title: state.name || 'Group',
+    title: (groupConv && groupConv.title) || state.name || 'Group',
     locked: false,
     messages: groupMessages,
   }];
@@ -638,7 +716,7 @@ function renderChatList(state) {
     .filter(c => c.kind !== 'group')
     .forEach(c => rows.push({
       id: c.id, kind: c.kind, title: c.title, locked: c.locked,
-      messages: state.messages.filter(m => m.conversation_id === c.id),
+      messages: state.messages.filter(m => convIdOf(m) === c.id),
     }));
 
   rows.forEach(c => list.appendChild(chatRow(c)));
@@ -646,8 +724,12 @@ function renderChatList(state) {
 
 function chatRow(c) {
   const el = document.createElement('div');
+  // Compare the id directly. The old `(c.id || null) === activeConv` mapped the
+  // group row's null id onto activeConv, which only highlighted correctly while
+  // activeConv was also null -- as soon as the group got its real id the
+  // selection highlight silently stopped tracking.
   el.className = 'chat' + (c.locked ? ' locked' : '') +
-                 ((c.id || null) === activeConv ? ' active' : '');
+                 (c.id === activeConv ? ' active' : '');
   el.dataset.conv = c.id || '';
 
   const initials = (c.kind === 'group' ? '#' : (c.title || '?').slice(0, 2).toUpperCase());
@@ -697,7 +779,7 @@ function previewOf(m) {
 
 function markActiveChat() {
   document.querySelectorAll('.chat').forEach(el => {
-    const id = el.dataset.conv || null;
+    const id = el.dataset.conv || groupConvId;
     el.classList.toggle('active', id === activeConv);
   });
 }
@@ -868,6 +950,36 @@ $('pickCancel').onclick = () => $('dmPicker').classList.remove('show');
 $('dmPicker').onclick = e => { if (e.target === $('dmPicker')) $('dmPicker').classList.remove('show'); };
 
 $('backBtn').onclick = () => $('side').classList.remove('hidden');
+
+// --------------------------------------------------- sidebar collapse
+
+// Hides the chat and members lists so the conversation gets the full width.
+// The preference is remembered per room code rather than globally, because the
+// two layouts suit different moments: the list matters while choosing a chat,
+// and gets in the way once you are reading one.
+function setSidebar(collapsed) {
+  $('side').classList.toggle('collapsed', collapsed);
+  $('collapseBtn').innerHTML = collapsed ? '&#10095;' : '&#10094;';
+  $('collapseBtn').title = collapsed ? 'Show chats and members'
+                                     : 'Hide chats and members';
+  $('collapseBtn').setAttribute('aria-label',
+    collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  try {
+    localStorage.setItem('qds_side_' + ($('roomCode').textContent || 'new'),
+                         collapsed ? '1' : '0');
+  } catch (e) {}
+}
+
+$('collapseBtn').onclick = () =>
+  setSidebar(!$('side').classList.contains('collapsed'));
+
+// Restore on join, and Ctrl+\ as a keyboard shortcut.
+document.addEventListener('keydown', e => {
+  if (e.key === '\\' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    setSidebar(!$('side').classList.contains('collapsed'));
+  }
+});
 
 $('roomCode').onclick = async () => {
   try { await navigator.clipboard.writeText(location.origin + '/room?c=' + $('roomCode').textContent); } catch (e) {}
