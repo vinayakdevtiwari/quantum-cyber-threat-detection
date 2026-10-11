@@ -1,6 +1,12 @@
 """
-Drive the private-chat breach the way the attacker console does, over a real
-WebSocket, so the console's actual flow is exercised rather than assumed.
+Exercise the private-chat access gate over a real WebSocket.
+
+These drive the `dm_access` socket command directly rather than through a UI.
+The attacker console's breach panel was removed as broken, but the gate itself
+is unchanged and still reachable on the wire -- and a gate that is only ever
+tested through a browser is a gate nobody can test when the browser is the
+thing that is broken. Testing the protocol keeps the security property covered
+independently of whatever is drawn on screen.
 
 Not part of the normal suite: it needs a live server. Run with
     QDS_TEST_SERVER=http://127.0.0.1:5000 python -m pytest tests/test_breach_console.py
