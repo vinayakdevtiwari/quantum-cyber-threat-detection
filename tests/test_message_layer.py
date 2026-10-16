@@ -7,6 +7,7 @@ from message_layer import (
     ATTACK_NONE, ATTACK_FORGERY, ATTACK_REPLAY, ATTACK_CHANNEL,
     ATTACK_SUBSTITUTE,
     MAX_MESSAGE_CHARS, MIN_MESSAGE_CHARS,
+    NOISE_FLOOR,
 )
 
 
@@ -225,13 +226,43 @@ def test_honest_channel_verifies_clean_when_noise_is_off():
 
 
 def test_forgery_is_detected_and_localised():
-    original = text_to_bits("HELLO WORLD")
+    """
+    A forgery must be localised to exactly the attacked positions.
+
+    Noise is switched OFF here, and deliberately so. With noise on, the verdict
+    depends on whether the channel happened to flip a third bit: two forged bits
+    on an 88-bit message is 2.3%, which sits UNDER the 2.8% NOISE_FLOOR, so the
+    status flipped between VERIFIED and SUSPECT depending on luck. That made
+    this test assert the noise, not the forgery.
+
+    With the channel quiet the property is exact and deterministic -- the
+    received pattern differs from the original at precisely [16, 17] -- which is
+    what "localised" is supposed to mean.
+    """
     result = transmit_message("HELLO WORLD", attack=ATTACK_FORGERY, seed=5,
-                              target_bits=[16, 17], shots=128)
+                              target_bits=[16, 17], shots=128, inject_noise=False)
     v = result["verification"]
-    assert v["status"] in ("SUSPECT", "TAMPERED")
-    # The attacked positions must appear among the detected differences.
-    assert set([16, 17]).issubset(set(v["corrupted_indices"]))
+    assert v["corrupted_indices"] == [16, 17]
+    assert v["corrupted_count"] == 2
+
+
+def test_forgery_above_the_noise_floor_is_flagged():
+    """
+    A forgery scaled the way the room scales real ones must never read VERIFIED.
+
+    suggest_target_bits sizes a forgery to clear NOISE_FLOOR, which is what both
+    the attack console and the room actually send. This pins that the status
+    flips once the damage is unambiguously larger than honest hardware noise,
+    which is the property the demo depends on.
+    """
+    text = "HELLO WORLD"
+    targets = suggest_target_bits(text, count=4)
+    assert len(targets) / len(text_to_bits(text)) > NOISE_FLOOR
+
+    for _ in range(50):
+        result = transmit_message(text, attack=ATTACK_FORGERY, seed=7,
+                                  target_bits=targets, shots=96)
+        assert result["verification"]["status"] in ("SUSPECT", "TAMPERED")
 
 
 def test_replay_changes_the_received_text():

@@ -287,6 +287,11 @@ def transmit_bit(bit: int, shots: int = 256, noise_model=DEFAULT_NOISE_MODEL) ->
     Qiskit reports counts as c2 c1 c0, so Bob's qubit (clbit 2) is the
     LEFTMOST character. Reading the wrong end reports ~50% fidelity on a
     perfectly honest transfer.
+
+    UNSEEDED BY DESIGN. The simulator draws from OS entropy so that repeated
+    calls sample the channel rather than replay one fixed outcome. Anything
+    that needs reproducibility goes through stable_expected_distribution,
+    which is explicitly seeded.
     """
     qc = build_bit_circuit(bit, noise_model)
     job = _sim.run(qc, shots=shots, noise_model=noise_model)
@@ -623,6 +628,33 @@ def transit_bits(bits: list, shots: int = 256, noise_model=None,
     the room path both call it -- the room previously carried its own copy,
     which meant a change to how noise was modelled had to be made in two
     places and the two could silently disagree.
+
+    WHY FIDELITY IS MEASURED ONCE PER BIT VALUE
+    --------------------------------------------
+    A bit's fidelity is a property of the CHANNEL and the bit's value, not of
+    where that bit happens to sit in the message. Position 0 and position 400
+    travel identical circuits at identical settings, so re-running the
+    simulation per position re-measures the same quantity hundreds of times.
+
+    That cost real time exactly where it was least tolerable: transit_bits runs
+    after the room's countdown reaches zero, so every extra millisecond is
+    dead air between "transmitting" finishing and the message appearing. At
+    512 bits (the 64-character maximum) the loop spent ~2s there.
+
+    So each distinct bit value is measured once per (shots, noise_model) and
+    reused for every position holding that value. Two teleports replace five
+    hundred.
+
+    This is NOT a shortcut that weakens the physics. The per-bit randomness
+    that actually decides the outcome is preserved exactly: `rng` below is
+    seeded from the caller, and each bit still gets an independent draw
+    against the fidelity. What is removed is the re-measurement of a constant,
+    not the noise.
+
+    It also makes the demo MORE honest than the alternative. Measuring the
+    channel twice and averaging the two estimates describes a channel that is
+    quietly changing between the first bit and the last. Holding one fidelity
+    for the whole message is what a single physical link actually does.
     """
     if not inject_noise:
         return [int(b) for b in bits]
@@ -630,9 +662,20 @@ def transit_bits(bits: list, shots: int = 256, noise_model=None,
     rng = np.random.default_rng(seed if seed is not None else 20260101)
     model = noise_model
 
+    # One measurement per distinct bit value, built on first use so a call that
+    # only ever sends 1s never pays for the 0.
+    fidelity_by_value = {}
+
+    def fidelity_for(bit):
+        if bit not in fidelity_by_value:
+            fidelity_by_value[bit] = transmit_bit(bit, shots=shots,
+                                                  noise_model=model)
+        return fidelity_by_value[bit]
+
     transmitted = []
     for bit in bits:
-        fidelity = transmit_bit(bit, shots=shots, noise_model=model)
+        bit = int(bit) & 1
+        fidelity = fidelity_for(bit)
 
         # Sample the received bit from the measured fidelity. With fidelity f
         # there are two equivalent readings -- receive the sent bit with

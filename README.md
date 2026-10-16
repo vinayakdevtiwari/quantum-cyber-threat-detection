@@ -4,6 +4,8 @@ A team project for **KCC Build With Bharat 4.0** that demonstrates a **quantum-c
 
 The application simulates normal and attack-modified sessions, compares measurement distributions with an expected reference, estimates session error rates, evaluates combined security postures, enriches investigations with technical evidence retrieved via TinyFish, and generates/emails understandable security reports to analysts.
 
+It also ships a **live multi-device attack demo**: a WhatsApp-style group chat where optional participants play the attacker and manipulate quantum-transmitted messages in real time, watched live by the SOC dashboard.
+
 > **Scope and limitations:** This is a research and educational prototype built with Qiskit Aer circuit simulation. It is not a production QDS deployment, a formal security proof, or a detector validated against real-world physical quantum hardware. The attack injectors represent simplified circuit-level perturbations, and thresholds are representative simulation settings that require extensive empirical benchmarking before physical hardware deployment.
 
 ---
@@ -48,58 +50,60 @@ The application simulates normal and attack-modified sessions, compares measurem
 - Dark SOC-themed responsive HTML template with strict `html.escape` sanitation against XSS injection, alongside a complete plain-text fallback alternative.
 - In-UI preview, client-side recipient validation, duplicate send prevention, and server-side credential isolation.
 
+### 5. Live Multi-Device Attack Demo (`server.py`, `rooms.py`, `room_server.py`)
+- **Room-based group chat transport** — a WhatsApp-style room served by Flask, joinable from any device on the LAN with a short room code. Phones are thin clients; the laptop does all quantum work.
+- **Real-time attack console (`/attack`)** — an attacker joins the same room, watches the message stream, and during the narrow transit window injects forgery, impersonation, replay, or channel manipulation per `message_layer.py`.
+- **Quantum witness verification (`signature.py`)** — a physical, consumable signing state that closes the forgery and replay gap plaintext comparison cannot: forgery succeeds with probability 2**-L, and replay fails because verification measures (collapses) the witness.
+- **Per-viewer privacy boundary** — private chats render only for their participants; the attack console cannot read them.
+- **Forensic persistence** — every message result is written to a local SQLite database (`qds_sessions.db`, auto-created), which the Streamlit dashboard reads cross-process as its evidence trail.
+
 ---
 
 ## Architecture Overview
 
 ```text
 +-----------------------------------------------------------------------------------+
-|                           QDS Circuit Simulation (Qiskit Aer)                     |
+|                       QDS Circuits (Qiskit Aer)                                   |
+|   session simulator (simulator.py)      message layer (message_layer.py)          |
 +-----------------------------------------------------------------------------------+
-        |                                                                 |
-        v                                                                 v
-+-------------------------------+                                 +-----------------+
-|   Measurement Distributions   |                                 |   Bit Fidelity  |
-| (Multi-qubit outcome counts)  |                                 |  (clbit 2 error)|
-+-------------------------------+                                 +-----------------+
-        |                                                                 |
-        v                                                                 v
-+-------------------------------+                                 +-----------------+
-|      Threat Detector          |                                 | Security State  |
-| (Chi-squared divergence test) |                                 |  (QBER <= 11%)  |
-+-------------------------------+                                 +-----------------+
-        |                                                                 |
-        +-------------------------------+---------------------------------+
-                                        |
-                                        v
-                        +-------------------------------+
-                        |          Risk Engine          |
-                        |      (2x2 Decision Matrix)    |
-                        +-------------------------------+
-                                        |
-                                        v
-                    =========================================
-                               Q-INTEL AGENT CORE
-                    =========================================
-                                        |
+        |                                        |                    ^
+        v                                        v                    |
++-------------------------------+   +------------------------+   +----------------------+
+|   Measurement Distributions   |   |  Live Room Transport   |   |  Attack Console      |
+|  (multi-qubit outcome counts) |   | rooms.py + room_server |   |  (browser/phone)     |
++-------------------------------+   +------------------------+   +----------------------+
+        |                                        |                    |
+        v                                        v                    |
++-------------------------------+   +------------------------+          |
+|      Threat Detector          |   |   Witness Verify       |          |
+|  (chi-squared divergence)     |   |   (signature.py)       |          |
++-------------------------------+   +------------------------+          |
+        |                                        |                    |
+        v                                        v                    |
++-------------------------------+   +---------------------------------------------+
+|      Security State           |   |          Risk Engine + Metrics              |
+|   (QBER <= 11%)               |   |     (2x2 matrix, attack_metrics.py)         |
++-------------------------------+   +---------------------------------------------+
+        |                                        |
+        +-------------------+--------------------+
+                            |
+                            v
+                    ===============
+                     Q-INTEL AGENT
+                    ===============
         +-------------------------------+-------------------------------+
-        |                                                               |
         v                                                               v
 +-------------------------------+                               +-------------------+
 |      TinyFish Research        |                               |   Report Model    |
-| - Search API                  |                               | - Plain Summary   |
-| - Fetch API                   |                               | - Tech Telemetry  |
-| - Agent Deep Research         |                               | - Recommendations |
 +-------------------------------+                               +-------------------+
         |                                                               |
-        +-------------------------------+-------------------------------+
-                                        |
-                                        v
-                        +-------------------------------+
-                        |       Report Distribution     |
-                        | - Streamlit SOC Interface     |
-                        | - Resend Transactional Email  |
-                        +-------------------------------+
+        v                                                               v
++-------------------------------+   +-------------------------------------------------+
+|  Streamlit SOC dashboard      |   |  Forensic SQLite <- room results (phone_bridge) |
++-------------------------------+   +-------------------------------------------------+
+                            |
+                            v
+                  Resend / SMTP email reports
 ```
 
 ---
@@ -167,6 +171,29 @@ streamlit run app.py
 
 The application will launch on `http://localhost:8501`.
 
+### Running the Live Multi-Device Demo
+
+The fastest path to the full demo — one launcher, three windows:
+
+```bash
+run_demo.bat
+```
+
+Use `run_demo.bat --check` to run preflight checks only. The launcher health-checks each service before opening the browser windows:
+
+| Window | URL | Role |
+|---|---|---|
+| 1 | `http://<host-ip>:5000/room` | Victim — group chat with quantum-signed messages |
+| 2 | `http://<host-ip>:5000/attack` | Attacker — manipulates messages in transit |
+| 3 | `http://localhost:8501` | Streamlit SOC dashboard |
+
+To include phones as attackers, connect them to the same Wi-Fi/LAN as the laptop and open the `/attack` URL; `network.py` prints the host address to use. Manual startup without the launcher:
+
+```bash
+python server.py                          # victim + attacker + backend on :5000
+python -m streamlit run app.py --server.port 8501
+```
+
 ### Operating Workflow
 
 1. **Configure & Run Session (Tab 1: Session Overview):**
@@ -219,6 +246,8 @@ python -m pytest tests/ -v
 - **`tests/test_investigation_report.py`**: Schema validation, plain-language and technical report synthesis, blind-test confidentiality before and after reveal, and missing data handling.
 - **`tests/test_email_service.py`**: RFC email address validation, HTML escaping for XSS prevention, plain-text fallback formatting, missing configuration handling, and Resend API success/failure parsing.
 - **`tests/test_report_service.py`**: End-to-end Q-Intel investigation orchestration, offline fallbacks, prevention of accidental email sends during preview, and duplicate send prevention.
+- **`tests/test_signature.py`, `test_context_binding.py`, `test_message_layer.py`, `test_rooms.py`, `test_room_socket.py`**: the quantum witness layer, replay semantics, bit transport, room lifecycle, and WebSocket flow of the live demo.
+- **`tests/test_attack_metrics.py`, `test_breach_console.py`**: live attack telemetry and the private-chat access gate over a real WebSocket.
 
 ---
 
@@ -232,24 +261,45 @@ quantum-cyber-threat-detection/
 │   └── config.toml               # Streamlit theme configuration
 ├── app.py                        # Streamlit SOC dashboard & workflow orchestration
 ├── attacks.py                    # Quantum attack injection models
+├── attack_metrics.py             # Live attack telemetry metrics
 ├── calibrate.py                  # Offline threshold calibration script
 ├── detection.py                  # Error rate check, chi-squared deviation, threat score
+├── message_layer.py              # Bit transport, verification, attack labels
 ├── models/
 │   ├── __init__.py
 │   └── investigation_report.py   # Validated investigation report domain model
+├── network.py                    # LAN address discovery helper
+├── phone_bridge.py               # Cross-process SQLite bridge for the dashboard
+├── preflight.py                  # Demo launcher preflight checks
 ├── requirements.txt              # Project dependencies
 ├── risk_engine.py                # 2x2 security posture decision matrix
+├── room_server.py                # Room HTTP + WebSocket routes
+├── rooms.py                      # Room registry, membership, message lifecycle
+├── run_demo.bat                  # One-command launcher for the multi-device demo
+├── server.py                     # Flask backend: victim + attacker + sessions DB
 ├── services/
 │   ├── __init__.py
-│   ├── email_service.py          # Resend transactional email client & templates
+│   ├── email_service.py          # Resend/SMTP transactional email client & templates
 │   ├── report_service.py         # Q-Intel AI investigation agent orchestrator
 │   └── tinyfish_client.py        # TinyFish Search, Fetch, and Agent API client
+├── setup_email.py                # Interactive SMTP configuration helper
+├── signature.py                  # Quantum witness layer (forgery/replay defense)
 ├── simulator.py                  # Teleportation-style QDS circuit simulation
-└── tests/
+├── static/
+│   └── style.css                 # Shared styling for the Flask demo pages
+├── templates/                    # Flask demo pages (room, attack, victim, attacker, index)
+└── tests/                        # Unit + integration tests (12 suites, network mocked)
     ├── __init__.py
+    ├── test_attack_metrics.py
+    ├── test_breach_console.py
+    ├── test_context_binding.py
     ├── test_email_service.py
     ├── test_investigation_report.py
+    ├── test_message_layer.py
     ├── test_report_service.py
+    ├── test_room_socket.py
+    ├── test_rooms.py
+    ├── test_signature.py
     └── test_tinyfish_client.py
 ```
 

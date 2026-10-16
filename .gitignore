@@ -36,7 +36,6 @@ build/
 *.log
 debug_*.txt
 
-# 123 MB project archive; may embed .env or the SQLite database. Keep it
-# out of version control -- regenerate with 7-Zip when sharing.
-kcc.7z
+# Old 123 MB project archive; superseded by the git repo itself.
 *.7z
+
