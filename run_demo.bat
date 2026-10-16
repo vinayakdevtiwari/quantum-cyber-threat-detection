@@ -10,9 +10,11 @@ REM  Two apps total. The victim and attacker are routes on the SAME Flask
 REM  backend (server.py): /room and /attack. The dashboard is Streamlit
 REM  (app.py) on 8501.
 REM
-REM  HOST is the address the PHONES use. Change it to whichever address
-REM  network.py prints if the network changes. The laptop itself can
-REM  always use localhost.
+REM  HOST is the address the PHONES use. It is auto-detected below from the
+REM  live network interfaces (hotspot first, same order as network.py), so a
+REM  venue Wi-Fi change cannot leave the windows pointing at a stale IP.
+REM  Override one-off from a terminal with:  set HOST=x.x.x.x  The laptop
+REM  itself can always use localhost.
 REM
 REM  Usage:  run_demo.bat          (normal)
 REM          run_demo.bat --check  (preflight only, then exit)
@@ -21,7 +23,8 @@ REM ===================================================================
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
-set HOST=192.168.137.1
+REM HOST is auto-detected after Python is resolved; keep any value the caller
+REM exported before launching.
 
 set PY=.venv\Scripts\python.exe
 if not exist "%PY%" (
@@ -31,6 +34,17 @@ if not exist "%PY%" (
     echo.
     set PY=python
 )
+
+REM --- Auto-detect the phone-facing address ------------------------------
+REM Reuse network.py's ordering (hotspot adapter first) instead of a frozen
+REM IP, so the browser windows below and the phones always agree. If the
+REM detection fails for any reason, fall back to localhost, which the
+REM laptop can always reach.
+if not defined HOST (
+    for /f "delims=" %%a in ('%PY% -c "import network; print(network.primary_address())"') do set "HOST=%%a"
+)
+if not defined HOST set HOST=127.0.0.1
+echo    Phone-facing address: %HOST% -- laptop windows use this; dashboard stays on localhost
 
 where curl.exe >nul 2>&1
 if errorlevel 1 (set HAVE_CURL=0) else (set HAVE_CURL=1)
