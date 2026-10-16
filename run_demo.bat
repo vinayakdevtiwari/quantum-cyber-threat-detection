@@ -126,8 +126,31 @@ echo  Window 2  ATTACKER    http://%HOST%:5000/attack
 echo  Window 3  DASHBOARD   http://localhost:8501
 echo.
 echo  Enter the same room code in the victim and attacker windows.
-echo  Phones must be on the SAME network as this laptop.
 echo.
+echo  PHONES JOIN IN ONE OF TWO WAYS -- the server listens on BOTH
+echo  networks at once, so either row works without restarting:
+echo.
+set HOTHIT=0
+for /f "delims=" %%a in ('%PY% network.py --lines') do (
+    set "CAND=%%a"
+    if "!CAND:~0,12!"=="192.168.137." (
+        echo   HOTSPOT - phone joined THIS laptop's Mobile Hotspot:
+        echo       victim   http://%%a:5000/room
+        echo       attacker http://%%a:5000/attack
+        set HOTHIT=1
+    ) else (
+        echo   WI-FI - phone on the same Wi-Fi as this laptop:
+        echo       victim   http://%%a:5000/room
+        echo       attacker http://%%a:5000/attack
+    )
+    echo.
+)
+if "%HOTHIT%"=="0" (
+    echo   No hotspot address found. To run the phone-over-hotspot demo,
+    echo   turn on:  Windows Settings - Network and Internet - Mobile hotspot
+    echo   then start this launcher again. Until then, use the WI-FI row.
+    echo.
+)
 "%PY%" network.py
 echo.
 if not "%FAILED%"=="0" (

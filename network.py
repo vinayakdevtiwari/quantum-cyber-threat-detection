@@ -117,6 +117,12 @@ def describe(port=5000):
 
 
 if __name__ == "__main__":
+    if "--lines" in sys.argv:
+        # Machine-readable mode for run_demo.bat: one candidate IP per line,
+        # hotspot first. No banner, no aliases -- safe to for /f over.
+        for ip, _alias in candidate_addresses():
+            print(ip)
+        raise SystemExit(0)
     print("=" * 66)
     print(" ADDRESSES PHONES CAN REACH")
     print("=" * 66)
